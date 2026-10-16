@@ -204,6 +204,7 @@ export function HotelTicket({
   mapUrl,
   booked,
   done,
+  children,
 }: {
   label: string;
   name: string;
@@ -214,6 +215,8 @@ export function HotelTicket({
   mapUrl: string;
   booked?: boolean;
   done?: boolean;
+  /** Extra lines under the address, such as travel times. */
+  children?: React.ReactNode;
 }) {
   return (
     <article
@@ -234,6 +237,7 @@ export function HotelTicket({
         <h3 className="headline mt-4 text-[26px] [overflow-wrap:anywhere]">{name}</h3>
         {address && <p className="mt-2 text-[14px] font-light leading-snug text-muted">{address}</p>}
         {note && <p className="mt-2 text-[13px] leading-snug text-muted">{note}</p>}
+        {children}
       </div>
 
       <div className="mx-5 border-t border-dashed border-ink/15" />

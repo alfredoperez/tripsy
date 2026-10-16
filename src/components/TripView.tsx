@@ -5,6 +5,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { hotelName, isCheckOut, mapsSearch, parseFlight } from "@/lib/tickets";
 import type { Day, Leg, Stop, StopKind, Trip } from "@/lib/types";
+import {
+  ClosestList,
+  DistanceProvider,
+  NearMeBar,
+  NearMeButton,
+  TravelLine,
+  useDistances,
+  type DistanceApi,
+  type Place,
+} from "./Distance";
 import { CopyCode, FlightTicket, HotelTicket } from "./Tickets";
 
 const KIND_ICON: Record<StopKind, string> = {
@@ -19,6 +29,31 @@ const KIND_ICON: Record<StopKind, string> = {
 };
 
 const HIGHLIGHT_MS = 4000;
+const REFETCH_DEBOUNCE_MS = 500;
+const COORD_COLUMNS = new Set(["lat", "lng", "updated_at"]);
+
+/**
+ * True when an update touched only lat/lng/updated_at. Needs the old row,
+ * which stops sends in full (replica identity full); without it, assume a
+ * real change.
+ */
+function onlyCoordsChanged(old: Record<string, unknown> | undefined, next: Record<string, unknown>) {
+  if (!old || Object.keys(old).length <= 1) return false;
+  return Object.keys(next).every(
+    (key) => COORD_COLUMNS.has(key) || JSON.stringify(old[key]) === JSON.stringify(next[key]),
+  );
+}
+
+function patchStopCoords(trip: Trip, id: string, lat: number | null, lng: number | null): Trip {
+  return {
+    ...trip,
+    days: trip.days.map((day) =>
+      day.stops.some((stop) => stop.id === id)
+        ? { ...day, stops: day.stops.map((stop) => (stop.id === id ? { ...stop, lat, lng } : stop)) }
+        : day,
+    ),
+  };
+}
 
 function todayIn(timezone: string) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: timezone }).format(new Date());
@@ -56,6 +91,7 @@ export function TripView({ slug }: { slug: string }) {
   const [changed, setChanged] = useState<Set<string>>(new Set());
   const todayRef = useRef<HTMLElement | null>(null);
   const scrolled = useRef(false);
+  const distance = useDistances();
 
   useEffect(() => {
     let cancelled = false;
@@ -85,21 +121,46 @@ export function TripView({ slug }: { slug: string }) {
       }, HIGHLIGHT_MS);
     };
 
+    // One refetch for a burst of changes, not one per row.
+    let refetchTimer: ReturnType<typeof setTimeout> | null = null;
+    const refetch = () => {
+      if (refetchTimer) clearTimeout(refetchTimer);
+      refetchTimer = setTimeout(() => {
+        refetchTimer = null;
+        fetchTrip(slug).then((data) => data && setTrip(data));
+      }, REFETCH_DEBOUNCE_MS);
+    };
+
     const channel = supabase.channel(`trip-${tripId}`);
     for (const table of ["stops", "days", "legs"]) {
       channel.on(
         "postgres_changes",
         { event: "*", schema: "public", table, filter: `trip_id=eq.${tripId}` },
         (payload) => {
-          const row = payload.new as { id?: string };
+          const row = payload.new as Record<string, unknown> & { id?: string };
+          // A coordinate backfill (from "How far?") is not news: patch the
+          // stop in place, no flash, no refetch.
+          if (
+            table === "stops" &&
+            payload.eventType === "UPDATE" &&
+            row.id &&
+            onlyCoordsChanged(payload.old as Record<string, unknown>, row)
+          ) {
+            const { id } = row;
+            const lat = row.lat as number | null;
+            const lng = row.lng as number | null;
+            setTrip((prev) => prev && patchStopCoords(prev, id, lat, lng));
+            return;
+          }
           if (row.id) flag(row.id);
-          fetchTrip(slug).then((data) => data && setTrip(data));
+          refetch();
         },
       );
     }
     channel.subscribe((status) => setLive(status === "SUBSCRIBED"));
 
     return () => {
+      if (refetchTimer) clearTimeout(refetchTimer);
       supabase.removeChannel(channel);
     };
   }, [tripId, slug]);
@@ -135,6 +196,7 @@ export function TripView({ slug }: { slug: string }) {
       onTogglePast={() => setShowPast((value) => !value)}
       changed={changed}
       todayRef={todayRef}
+      distance={distance}
     />
   );
 }
@@ -148,6 +210,7 @@ export function TripScreen({
   onTogglePast,
   changed,
   todayRef,
+  distance,
 }: {
   trip: Trip;
   today: string;
@@ -156,14 +219,19 @@ export function TripScreen({
   onTogglePast: () => void;
   changed: Set<string>;
   todayRef?: React.Ref<HTMLElement>;
+  /** Travel times; undefined hides "Near me" and "How far?". */
+  distance?: DistanceApi;
 }) {
+  const [closest, setClosest] = useState(false);
   const days = [...trip.days].sort((a, b) => a.date.localeCompare(b.date));
   const pastDays = days.filter((day) => day.date < today);
   const visibleDays = showPast ? days : days.filter((day) => day.date >= today);
   const lodgingDays = lodgingByDay(trip.legs ?? [], days);
   const shortSubtitle = trip.subtitle && trip.subtitle.length <= 32;
+  const places = placesFor(days.filter((day) => day.date >= today), lodgingDays);
+  const showClosest = Boolean(distance?.updatedAt) && closest;
 
-  return (
+  const content = (
     <main className="mx-auto w-full max-w-2xl px-4 pb-24 pt-5">
       <div className="flex items-center justify-between">
         <Link
@@ -175,13 +243,18 @@ export function TripScreen({
             <path d="M15 18 9 12l6-6" />
           </svg>
         </Link>
-        <div
-          className={`flex items-center gap-2 rounded-full px-3 py-2 font-mono text-[11px] uppercase tracking-widest ${
-            live ? "bg-ink text-white" : "bg-panel text-muted"
-          }`}
-        >
-          <span className={`h-2 w-2 rounded-full ${live ? "bg-live" : "bg-faint"}`} aria-hidden />
-          {live ? "Live" : "Connecting"}
+        <div className="flex items-center gap-2">
+          {distance && places.length > 0 && (
+            <NearMeButton api={distance} onTap={() => distance.nearMe(places)} />
+          )}
+          <div
+            className={`flex items-center gap-2 rounded-full px-3 py-2 font-mono text-[11px] uppercase tracking-widest ${
+              live ? "bg-ink text-white" : "bg-panel text-muted"
+            }`}
+          >
+            <span className={`h-2 w-2 rounded-full ${live ? "bg-live" : "bg-faint"}`} aria-hidden />
+            {live ? "Live" : "Connecting"}
+          </div>
         </div>
       </div>
 
@@ -204,35 +277,93 @@ export function TripScreen({
         </span>
       </div>
 
-      {pastDays.length > 0 && (
-        <button
-          type="button"
-          onClick={onTogglePast}
-          className="mt-8 w-full rounded-full bg-ink px-5 py-3.5 text-[13px] font-semibold uppercase tracking-wider text-white"
-        >
-          {showPast ? "Hide" : "Show"} past days · {pastDays.length}
-        </button>
-      )}
+      {distance && <NearMeBar api={distance} closest={closest} onClosest={setClosest} />}
 
-      <div className="mt-6 space-y-4">
-        {visibleDays.map((day) => (
-          <DayCard
-            key={day.id}
-            day={day}
-            number={days.indexOf(day) + 1}
-            isToday={day.date === today}
-            isPast={day.date < today}
-            changed={changed}
-            lodging={lodgingDays.get(day.id)}
-            sectionRef={day.date === today ? todayRef : undefined}
-          />
-        ))}
-        {visibleDays.length === 0 && (
-          <p className="text-muted">This trip is over. Show past days to look back.</p>
-        )}
-      </div>
+      {showClosest && distance ? (
+        <div className="mt-6">
+          <ClosestList api={distance} places={places} />
+        </div>
+      ) : (
+        <>
+          {pastDays.length > 0 && (
+            <button
+              type="button"
+              onClick={onTogglePast}
+              className="mt-8 w-full rounded-full bg-ink px-5 py-3.5 text-[13px] font-semibold uppercase tracking-wider text-white"
+            >
+              {showPast ? "Hide" : "Show"} past days · {pastDays.length}
+            </button>
+          )}
+
+          <div className="mt-6 space-y-4">
+            {visibleDays.map((day) => (
+              <DayCard
+                key={day.id}
+                day={day}
+                number={days.indexOf(day) + 1}
+                isToday={day.date === today}
+                isPast={day.date < today}
+                changed={changed}
+                lodging={lodgingDays.get(day.id)}
+                sectionRef={day.date === today ? todayRef : undefined}
+              />
+            ))}
+            {visibleDays.length === 0 && (
+              <p className="text-muted">This trip is over. Show past days to look back.</p>
+            )}
+          </div>
+        </>
+      )}
     </main>
   );
+
+  return distance ? (
+    <DistanceProvider value={{ api: distance, places }}>{content}</DistanceProvider>
+  ) : (
+    content
+  );
+}
+
+/**
+ * What "Near me" times: every stop on the upcoming days except flights and
+ * stops already done, plus the leg hotel cards ("Your base").
+ */
+function placesFor(days: Day[], lodgingDays: Map<string, Leg>): Place[] {
+  const places: Place[] = [];
+  for (const day of days) {
+    const dayLabel = formatDate(day.date);
+    const stops = [...day.stops].sort((a, b) => a.position - b.position);
+    for (const stop of stops) {
+      if (stop.kind === "travel" || stop.done) continue;
+      places.push({
+        id: stop.id,
+        dayId: day.id,
+        dayLabel,
+        icon: KIND_ICON[stop.kind],
+        title: stop.kind === "stay" ? hotelName(stop.title) : stop.title,
+        address: stop.address,
+        mapUrl: stop.map_url,
+        coords: stop.lat != null && stop.lng != null ? { lat: stop.lat, lng: stop.lng } : null,
+        persist: true,
+      });
+    }
+    const leg = lodgingDays.get(day.id);
+    if (leg?.lodging_name) {
+      places.push({
+        id: leg.id,
+        dayId: day.id,
+        dayLabel,
+        icon: KIND_ICON.stay,
+        title: leg.lodging_name,
+        address: leg.lodging_address,
+        mapUrl: leg.lodging_map_url,
+        coords: null,
+        // Legs have no coordinate columns: looked up once per session.
+        persist: false,
+      });
+    }
+  }
+  return places;
 }
 
 /**
@@ -336,7 +467,9 @@ function DayCard({
                 lodging.lodging_map_url ||
                 mapsSearch(lodging.lodging_address || lodging.lodging_name || "")
               }
-            />
+            >
+              <TravelLine id={lodging.id} className="mt-3" raised />
+            </HotelTicket>
           </li>
         )}
         {topLevel.length === 0 && !lodging && (
@@ -384,7 +517,9 @@ function StopItem({
           mapUrl={stop.map_url || mapsSearch(stop.address || name)}
           booked={stop.booked}
           done={stop.done}
-        />
+        >
+          <TravelLine id={stop.id} className="mt-3" raised />
+        </HotelTicket>
       )}
       {nested.length > 0 && (
         <div className="px-2 pt-3">
@@ -455,6 +590,7 @@ function StopRow({
           {stop.address && (
             <p className="mt-1 font-mono text-[11px] leading-snug text-faint">{stop.address}</p>
           )}
+          <TravelLine id={stop.id} className="mt-2" />
           {stop.booking_code && (
             <div className="mt-2 inline-block max-w-full rounded-2xl bg-background px-3 py-2">
               <CopyCode code={stop.booking_code} tone="light" />
@@ -482,10 +618,11 @@ function NestedStops({ nested, changed }: { nested: Stop[]; changed: Set<string>
           }`}
         >
           <span aria-hidden>{KIND_ICON[child.kind]}</span>
-          <span className="min-w-0">
+          <div className="min-w-0 flex-1">
             <span className="font-semibold">{child.title}</span>
             {child.note && <span className="font-light text-muted"> · {child.note}</span>}
-          </span>
+            <TravelLine id={child.id} className="mt-1.5" raised />
+          </div>
         </li>
       ))}
     </ul>

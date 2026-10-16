@@ -23,6 +23,9 @@ export type Stop = {
   booked: boolean;
   done: boolean;
   image_path: string | null;
+  /** Filled on demand the first time someone asks how far the stop is. */
+  lat: number | null;
+  lng: number | null;
 };
 
 export type Day = {
