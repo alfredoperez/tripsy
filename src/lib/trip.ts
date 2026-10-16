@@ -2,18 +2,7 @@
 
 import { supabase } from "@/lib/supabase";
 import { hotelName, parseFlight } from "@/lib/tickets";
-import type { Day, Leg, Stop, StopKind, Trip } from "@/lib/types";
-
-export const KIND_ICON: Record<StopKind, string> = {
-  travel: "✈️",
-  eat: "🍽️",
-  coffee: "☕",
-  work: "💻",
-  hike: "🥾",
-  see: "🏛️",
-  stay: "🛏️",
-  brewery: "🍺",
-};
+import type { Day, Leg, Stop, Trip } from "@/lib/types";
 
 export async function fetchTrip(slug: string) {
   const { data } = await supabase
@@ -65,7 +54,7 @@ export function stopPlace(stop: Stop, day: Day, dayLabel = formatDate(day.date).
     dayId: day.id,
     dayLabel,
     kind: stop.kind,
-    icon: KIND_ICON[stop.kind],
+    imageUrl: stop.image_url,
     title: stop.kind === "stay" ? hotelName(stop.title) : stop.title,
     address: stop.address,
     mapUrl: stop.map_url,

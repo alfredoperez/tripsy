@@ -1,13 +1,29 @@
 "use client";
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { SignIn } from "@/components/AuthGate";
 import { fakeTravel, type NearbyApi, type Place, type TravelResult } from "@/components/Distance";
-import { nearbyPlaces, NearbyScreen } from "@/components/Nearby";
+import { nearbyPlaces } from "@/components/Nearby";
 import { dayPairs, type RouteApi } from "@/components/Routes";
+import { useStopEdits } from "@/components/StopEdits";
 import { TripList } from "@/components/TripList";
-import { TripScreen } from "@/components/TripView";
+import { TripScreen, type Tab } from "@/components/TripView";
 import { coordsFromMapUrl, crowFlies, type LatLng } from "@/lib/mapbox";
 import type { Day, Stop, Trip } from "@/lib/types";
+
+// Public photos of Guadalajara and Tequila from Wikimedia Commons.
+const PHOTO = {
+  cathedral:
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/5/53/Catedral_Guadalajra_IMG_20211017_194154.jpg/500px-Catedral_Guadalajra_IMG_20211017_194154.jpg",
+  cabanas:
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8f/Hospicio_Caba%C3%B1as%2C_Guadalajara%2C_Jalisco_-_14.jpg/500px-Hospicio_Caba%C3%B1as%2C_Guadalajara%2C_Jalisco_-_14.jpg",
+  skyline:
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/3/38/Panor%C3%A1mica_Guadalajara_desde_edificio_Bansi_hacia_norte_%28cropped%29.jpg/500px-Panor%C3%A1mica_Guadalajara_desde_edificio_Bansi_hacia_norte_%28cropped%29.jpg",
+  tequila:
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/1/19/Streets_of_Tequila_664424236_%28cropped%29.jpg/500px-Streets_of_Tequila_664424236_%28cropped%29.jpg",
+  // A dead link: shows the fallback wash, like a missing photo.
+  broken: "https://upload.wikimedia.org/wikipedia/commons/thumb/0/00/Not_a_real_file.jpg/500px-Not_a_real_file.jpg",
+};
 
 let n = 0;
 function stop(day_id: string, fields: Partial<Stop> & Pick<Stop, "kind" | "title">): Stop {
@@ -25,6 +41,7 @@ function stop(day_id: string, fields: Partial<Stop> & Pick<Stop, "kind" | "title
     booked: false,
     done: false,
     image_path: null,
+    image_url: null,
     lat: null,
     lng: null,
     ...fields,
@@ -49,7 +66,7 @@ const trip: Trip = {
       lodging_name: "Hotel Antré",
       lodging_address: "Av. Vallarta 1390, Guadalajara",
       lodging_map_url: null,
-      lodging_booking_code: "90210",
+      lodging_booking_code: "DEMO01",
     },
     {
       id: "l2",
@@ -87,7 +104,7 @@ const trip: Trip = {
           title: "Volaris flight SAT→GDL",
           time_label: "3:48 PM CT",
           note: "Y4 1517 · arr 6:05 PM · carry-on only",
-          booking_code: "XK42TR",
+          booking_code: "ABC123",
           booked: true,
         }),
         stop("d1", {
@@ -95,12 +112,12 @@ const trip: Trip = {
           title: "Check in at Hotel Antré",
           time_label: "~7:30 PM",
           address: "Av. Vallarta 1390, Guadalajara",
-          booking_code: "90210",
+          booking_code: "DEMO01",
           booked: true,
           lat: 20.674,
           lng: -103.368,
         }),
-        stop("d1", { kind: "eat", title: "Tacos at Karnes Garibaldi", time_label: "9 PM", note: "Carne en su jugo", map_url: "https://www.google.com/maps/place/x/@20.6857,-103.3533,17z" }),
+        stop("d1", { kind: "eat", title: "Tacos at Karnes Garibaldi", time_label: "9 PM", note: "Carne en su jugo", image_url: PHOTO.skyline, map_url: "https://www.google.com/maps/place/x/@20.6857,-103.3533,17z" }),
       ],
     },
     {
@@ -111,10 +128,10 @@ const trip: Trip = {
       kind: "explore",
       summary: null,
       stops: [
-        stop("d2", { kind: "coffee", title: "Café Palreal", time_label: "8:30 AM", lat: 20.6747, lng: -103.364 }),
-        stop("d2", { kind: "see", title: "Centro Histórico loop", time_label: "10 AM", note: "About 3 km", lat: 20.6767, lng: -103.3475 }),
+        stop("d2", { kind: "coffee", title: "Café Palreal", time_label: "8:30 AM", done: true, lat: 20.6747, lng: -103.364 }),
+        stop("d2", { kind: "see", title: "Centro Histórico loop", time_label: "10 AM", note: "About 3 km, cathedral first. Hats and shade: the plazas get hot by noon.", address: "Av. Fray Antonio Alcalde 10, Centro, Guadalajara", image_url: PHOTO.cathedral, lat: 20.6767, lng: -103.3475 }),
         { ...stop("d2", { kind: "see", title: "Catedral", lat: 20.6774, lng: -103.3473 }), parent_stop_id: "s7" },
-        { ...stop("d2", { kind: "see", title: "Hospicio Cabañas", note: "Orozco murals", lat: 20.677, lng: -103.3389 }), parent_stop_id: "s7" },
+        stop("d2", { kind: "see", title: "Hospicio Cabañas", time_label: "11:30 AM", note: "Orozco murals", image_url: PHOTO.cabanas, lat: 20.677, lng: -103.3389 }),
         stop("d2", { kind: "eat", title: "Mercado San Juan de Dios", time_label: "1 PM", note: "Birria upstairs", lat: 20.6743, lng: -103.3386 }),
         stop("d2", { kind: "coffee", title: "Café Benito", time_label: "4 PM", lat: 20.6731, lng: -103.3647 }),
         stop("d2", { kind: "brewery", title: "Cervecería Colimita", time_label: "7 PM", lat: 20.6697, lng: -103.3741 }),
@@ -130,8 +147,8 @@ const trip: Trip = {
       stops: [
         stop("d3", { kind: "travel", title: "Bus to Tequila", time_label: "10 AM" }),
         stop("d3", { kind: "eat", title: "Lunch somewhere in town", time_label: "2 PM" }),
-        stop("d3", { kind: "see", title: "Mundo Cuervo distillery tour", time_label: "4 PM", lat: 20.8826, lng: -103.8358 }),
-        stop("d3", { kind: "brewery", title: "La Cantina", time_label: "8 PM", lat: 20.8818, lng: -103.8371 }),
+        stop("d3", { kind: "see", title: "Mundo Cuervo distillery tour", time_label: "4 PM", image_url: PHOTO.tequila, lat: 20.8826, lng: -103.8358 }),
+        stop("d3", { kind: "brewery", title: "La Cantina", time_label: "8 PM", image_url: PHOTO.broken, lat: 20.8818, lng: -103.8371 }),
       ],
     },
     {
@@ -220,7 +237,7 @@ function useFakeNearby(mode: NearMode, setMode: (mode: NearMode) => void, places
   };
 }
 
-type View = "trip" | "nearby" | "list";
+type View = "trip" | "nearby" | "list" | "signin";
 
 function subscribeHash(onChange: () => void) {
   window.addEventListener("hashchange", onChange);
@@ -229,26 +246,33 @@ function subscribeHash(onChange: () => void) {
 
 function useView(): View {
   const hash = useSyncExternalStore(subscribeHash, () => window.location.hash, () => "");
-  return hash === "#nearby" ? "nearby" : hash === "#list" ? "list" : "trip";
+  return hash === "#nearby" ? "nearby" : hash === "#list" ? "list" : hash === "#signin" ? "signin" : "trip";
 }
 
 const TODAY = "2026-10-27";
+const CHANGED = new Set(["s5"]);
 
 export function Preview() {
   const [showPast, setShowPast] = useState(false);
   const view = useView();
+  const [data, setData] = useState<Trip | null>(trip);
   const [near, setNearState] = useState<NearMode>("idle");
   const setNear = useCallback((mode: NearMode) => setNearState(mode), []);
-  const places = nearbyPlaces(trip, TODAY);
+  const places = useMemo(() => nearbyPlaces(data ?? trip, TODAY), [data]);
   const routes = useFakeRoutes();
   const nearby = useFakeNearby(near, setNear, places);
-  const changed = new Set(["s5"]);
+  // Same actions as the real page, without the writes.
+  const { api: edits, toast, show } = useStopEdits({ trip: data, setTrip: setData, persist: false, reload: () => {} });
+  const setTab = (tab: Tab) => {
+    window.location.hash = tab === "nearby" ? "nearby" : "trip";
+  };
   return (
     <>
       <div className="flex flex-wrap gap-2 px-4 pt-3 font-mono text-[10px] uppercase text-muted">
         <a href="#trip">trip</a>
         <a href="#nearby">nearby</a>
         <a href="#list">list</a>
+        <a href="#signin">signin</a>
         <span aria-hidden>|</span>
         {(["idle", "locating", "done", "denied"] as const).map((mode) => (
           <button
@@ -260,27 +284,39 @@ export function Preview() {
             near:{mode}
           </button>
         ))}
+        <span aria-hidden>|</span>
+        <button type="button" onClick={() => show("Hospicio Cabañas is next")}>
+          toast
+        </button>
+        <button type="button" onClick={() => setData(trip)}>
+          reset
+        </button>
       </div>
-      {view === "trip" ? (
-        <TripScreen
-          trip={trip}
-          today={TODAY}
-          live
-          showPast={showPast}
-          onTogglePast={() => setShowPast((v) => !v)}
-          changed={changed}
-          routes={routes}
-          nearbyHref="#nearby"
-        />
-      ) : view === "nearby" ? (
-        <NearbyScreen tripTitle={trip.title} backHref="#trip" places={places} api={nearby} />
-      ) : (
+      {view === "signin" ? (
+        <SignIn />
+      ) : view === "list" ? (
         <TripList
           today={TODAY}
           trips={[
             { slug: "gdl", title: "Guadalajara", start_date: "2026-10-26", end_date: "2026-11-04" },
             { slug: "ash", title: "Asheville road trip", start_date: "2026-06-02", end_date: "2026-06-12" },
           ]}
+        />
+      ) : (
+        <TripScreen
+          trip={data ?? trip}
+          today={TODAY}
+          live
+          showPast={showPast}
+          onTogglePast={() => setShowPast((v) => !v)}
+          changed={CHANGED}
+          routes={routes}
+          tab={view === "nearby" ? "nearby" : "itinerary"}
+          onTab={setTab}
+          nearby={nearby}
+          edits={edits}
+          toast={toast}
+          initialOpen={["s7"]}
         />
       )}
     </>

@@ -1,25 +1,17 @@
 "use client";
 
-// The Nearby page: the trip's places, closest first from where you are.
+// The Nearby tab: the trip's places, closest first from where you are.
 // Nothing asks for location or calls Mapbox until "Use my location".
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 import { hotelName } from "@/lib/tickets";
-import {
-  fetchTrip,
-  formatDate,
-  isFlight,
-  isPlaceable,
-  KIND_ICON,
-  lodgingByDay,
-  stopPlace,
-  todayIn,
-} from "@/lib/trip";
-import type { StopKind, Trip } from "@/lib/types";
-import { TravelChips, useNearby, type NearbyApi, type Place, type TravelResult } from "./Distance";
+import { formatDate, isFlight, isPlaceable, lodgingByDay, stopPlace } from "@/lib/trip";
+import type { Trip } from "@/lib/types";
+import { TravelLine, type NearbyApi, type Place, type TravelResult } from "./Distance";
+import { KindIcon, NearIcon } from "./icons";
+import { Photo } from "./Photo";
 
-type Filter = "all" | "eat" | "coffee" | "see" | "brewery" | "stay";
+type Filter = "all" | "eat" | "coffee" | "see" | "brewery" | "stay" | "hike" | "work";
 
 const FILTERS: { value: Filter; label: string }[] = [
   { value: "all", label: "All" },
@@ -28,6 +20,8 @@ const FILTERS: { value: Filter; label: string }[] = [
   { value: "see", label: "See" },
   { value: "brewery", label: "Drinks" },
   { value: "stay", label: "Stay" },
+  { value: "hike", label: "Hike" },
+  { value: "work", label: "Work" },
 ];
 
 function dedupeKey(title: string) {
@@ -64,7 +58,7 @@ export function nearbyPlaces(trip: Trip, today: string): Place[] {
           dayId: day.id,
           dayLabel: label,
           kind: "stay",
-          icon: KIND_ICON.stay,
+          imageUrl: null,
           title: hotelName(leg.lodging_name),
           address: leg.lodging_address,
           mapUrl: leg.lodging_map_url,
@@ -87,37 +81,6 @@ export function nearbyPlaces(trip: Trip, today: string): Place[] {
   return [...best.values()].sort((a, b) => a.order - b.order).map((c) => c.place);
 }
 
-export function NearbyView({ slug }: { slug: string }) {
-  const [trip, setTrip] = useState<Trip | null>(null);
-  const [missing, setMissing] = useState(false);
-  const api = useNearby();
-
-  useEffect(() => {
-    let cancelled = false;
-    fetchTrip(slug).then((data) => {
-      if (cancelled) return;
-      if (data) setTrip(data);
-      else setMissing(true);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [slug]);
-
-  if (missing) return <p className="p-8 text-muted">No trip called “{slug}”.</p>;
-  if (!trip) {
-    return <p className="p-8 font-mono text-xs uppercase tracking-widest text-muted">Loading…</p>;
-  }
-  return (
-    <NearbyScreen
-      tripTitle={trip.title}
-      backHref={`/t/${slug}`}
-      places={nearbyPlaces(trip, todayIn(trip.timezone))}
-      api={api}
-    />
-  );
-}
-
 function sortMeters(result: TravelResult | undefined) {
   if (result?.status !== "done") return Infinity;
   return result.travel.walk?.meters ?? result.travel.drive?.meters ?? Infinity;
@@ -130,26 +93,16 @@ function ago(then: number, now: number) {
   return `${Math.floor(minutes / 60)} h ago`;
 }
 
-function LocateIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden className={className} fill="currentColor">
-      <path d="M21.4 2.6a1 1 0 0 0-1.1-.2l-17 7.5a1 1 0 0 0 .1 1.9l7.1 2.1 2.1 7.1a1 1 0 0 0 1.9.1l7.5-17a1 1 0 0 0-.6-1.5Z" />
-    </svg>
-  );
+function kmNumber(meters: number) {
+  const km = meters / 1000;
+  return km < 10 ? km.toFixed(1) : String(Math.round(km));
 }
 
-/** The page from data alone. Also rendered by the dev preview. */
-export function NearbyScreen({
-  tripTitle,
-  backHref,
-  places,
-  api,
-}: {
-  tripTitle: string;
-  backHref: string;
-  places: Place[];
-  api: NearbyApi;
-}) {
+const chip =
+  "flex flex-none items-center gap-1.5 rounded-full px-3 py-2 text-[13px] font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink";
+
+/** The Nearby tab of a trip: its places, closest first from where you are. */
+export function NearbyPanel({ places, api }: { places: Place[]; api: NearbyApi }) {
   const [filter, setFilter] = useState<Filter>("all");
   const [now, setNow] = useState(() => Date.now());
   const working = api.status === "locating" || api.status === "timing";
@@ -163,10 +116,8 @@ export function NearbyScreen({
 
   const counts = new Map<Filter, number>([["all", places.length]]);
   for (const place of places) {
-    const kind = place.kind as StopKind;
-    if (FILTERS.some((f) => f.value === kind)) {
-      counts.set(kind as Filter, (counts.get(kind as Filter) ?? 0) + 1);
-    }
+    const kind = place.kind as Filter;
+    if (FILTERS.some((f) => f.value === kind)) counts.set(kind, (counts.get(kind) ?? 0) + 1);
   }
   const shown = places.filter((place) => filter === "all" || place.kind === filter);
   const rows = timed
@@ -176,125 +127,113 @@ export function NearbyScreen({
   const busyLabel = api.status === "locating" ? "Locating…" : "Timing…";
 
   return (
-    <main className="mx-auto w-full max-w-2xl px-4 pb-24 pt-5">
-      <div className="flex items-center justify-between">
-        <Link
-          href={backHref}
-          aria-label={`Back to ${tripTitle}`}
-          className="flex h-10 w-10 items-center justify-center rounded-full bg-panel text-ink"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M15 18 9 12l6-6" />
-          </svg>
-        </Link>
-        {timed && (
+    <section aria-label="Nearby">
+      {timed ? (
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-2.5">
+          <span className="font-mono text-[11px] text-muted">
+            {api.updatedAt ? `From you · updated ${ago(api.updatedAt, Math.max(now, api.updatedAt))}` : "From you"}
+          </span>
           <button
             type="button"
             onClick={() => api.locate(places)}
             disabled={working}
-            className="flex items-center gap-1.5 rounded-full bg-accent px-3 py-2 font-mono text-[11px] font-semibold uppercase tracking-widest text-ink active:scale-[0.97] disabled:opacity-70 motion-reduce:active:scale-100"
+            className={`${chip} bg-panel text-ink disabled:opacity-70`}
           >
-            <LocateIcon className={`h-3.5 w-3.5 ${working ? "motion-safe:animate-pulse" : ""}`} />
+            <NearIcon className={`h-[15px] w-[15px] ${working ? "motion-safe:animate-pulse" : ""}`} />
             {working ? busyLabel : "Refresh"}
           </button>
-        )}
-      </div>
-
-      <h1 className="headline mt-8 text-[clamp(2.4rem,12vw,3.75rem)]">Nearby</h1>
-      <p className="headline-light mt-1 text-[clamp(1.5rem,7vw,2.25rem)] [overflow-wrap:anywhere]">
-        {tripTitle}
-      </p>
-
-      {!timed && (
+        </div>
+      ) : (
         <button
           type="button"
           onClick={() => api.locate(places)}
           disabled={working || places.length === 0}
-          className="mt-6 flex w-full items-center justify-center gap-2 rounded-full bg-accent px-5 py-4 text-[15px] font-semibold uppercase tracking-wider text-ink active:scale-[0.98] disabled:opacity-70 motion-reduce:active:scale-100"
+          className="mt-6 flex h-[50px] w-full items-center justify-center gap-2 rounded-full bg-accent text-[15px] font-semibold text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink active:scale-[0.98] disabled:opacity-70 motion-reduce:active:scale-100"
         >
-          <LocateIcon className={`h-4 w-4 ${working ? "motion-safe:animate-pulse" : ""}`} />
+          <NearIcon className={`h-[18px] w-[18px] ${working ? "motion-safe:animate-pulse" : ""}`} />
           {working ? busyLabel : "Use my location"}
         </button>
       )}
 
-      {(api.message || api.updatedAt) && (
-        <p
-          aria-live="polite"
-          className={`mt-4 px-1 leading-snug ${
-            api.message
-              ? "text-[14px] font-medium text-ink"
-              : "font-mono text-[11px] uppercase tracking-wide text-muted"
-          }`}
-        >
-          {api.message ?? (api.updatedAt ? `From you · updated ${ago(api.updatedAt, Math.max(now, api.updatedAt))}` : "")}
+      {api.message && (
+        <p aria-live="polite" className="mt-3 px-1 text-[14px] font-medium leading-snug text-ink">
+          {api.message}
         </p>
       )}
 
-      <div className="mt-5 flex flex-wrap gap-1.5" role="group" aria-label="Kind of place">
-        {FILTERS.map((option) => {
-          const count = counts.get(option.value) ?? 0;
-          const active = filter === option.value;
-          return (
-            <button
-              key={option.value}
-              type="button"
-              aria-pressed={active}
-              disabled={count === 0}
-              onClick={() => setFilter(option.value)}
-              className={`flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[13px] font-semibold uppercase tracking-wide disabled:opacity-35 ${
-                active ? "bg-ink text-white" : "bg-panel text-ink"
-              }`}
-            >
-              {option.label}
-              <span className={`font-mono text-[11px] tabular-nums ${active ? "text-accent" : "text-muted"}`}>
-                {count}
-              </span>
-            </button>
-          );
-        })}
+      <div className="-mx-4 mt-3.5 flex gap-1.5 overflow-x-auto px-4 pb-1" role="group" aria-label="Kind of place">
+        {FILTERS.filter((option) => option.value === "all" || (counts.get(option.value) ?? 0) > 0).map(
+          (option) => {
+            const active = filter === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setFilter(option.value)}
+                className={`${chip} ${active ? "bg-ink text-white" : "bg-panel text-ink"}`}
+              >
+                {option.value === "all" ? (
+                  `All · ${places.length}`
+                ) : (
+                  <>
+                    <KindIcon kind={option.value} className="h-[15px] w-[15px]" />
+                    {option.label}
+                  </>
+                )}
+              </button>
+            );
+          },
+        )}
       </div>
 
-      <section className="mt-4 overflow-hidden rounded-[28px] bg-panel">
-        <ul className="divide-y divide-line">
-          {rows.map((place) => {
-            const result = api.results[place.id];
-            return (
-              <li key={place.id} className="flex gap-3.5 px-5 py-4">
-                <div
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-background text-[17px]"
-                  aria-hidden
-                >
-                  {place.icon}
+      <ul className="mt-1">
+        {rows.map((place) => {
+          const result = api.results[place.id];
+          const done = timed && result?.status === "done" ? result.travel : null;
+          const meters = done ? (done.walk?.meters ?? done.drive?.meters ?? null) : null;
+          return (
+            <li
+              key={place.id}
+              className="mt-2.5 grid grid-cols-[56px_1fr_auto] items-center gap-3 rounded-[22px] bg-panel p-2.5"
+            >
+              <Photo url={place.imageUrl} kind={place.kind} className="h-14 w-14 rounded-[14px]">
+                <span className="absolute bottom-1 left-1 flex h-6 w-6 items-center justify-center rounded-full bg-panel text-ink">
+                  <KindIcon kind={place.kind} className="h-3.5 w-3.5" />
+                </span>
+              </Photo>
+              <div className="min-w-0">
+                <div className="font-mono text-[10px] uppercase text-muted">{place.dayLabel}</div>
+                <div className="text-[15px] font-semibold leading-snug [overflow-wrap:anywhere]">
+                  {place.title}
                 </div>
-                <div className="min-w-0 flex-1">
-                  <div className="font-mono text-[11px] font-medium uppercase tracking-wide text-muted">
-                    {place.dayLabel}
+                {done && (
+                  <div className="mt-0.5">
+                    <TravelLine travel={done} km={false} />
                   </div>
-                  <div className="text-[16px] font-semibold leading-snug [overflow-wrap:anywhere]">
-                    {place.title}
-                  </div>
-                  {timed && result?.status === "done" && (
-                    <div className="mt-2">
-                      <TravelChips travel={result.travel} />
-                    </div>
-                  )}
-                  {timed && result?.status === "none" && (
-                    <p className="mt-1 text-[12px] text-faint">Couldn’t place this one on the map.</p>
-                  )}
+                )}
+                {timed && result?.status === "none" && (
+                  <p className="mt-0.5 text-[12px] text-faint">Couldn’t place this one on the map.</p>
+                )}
+              </div>
+              {meters !== null ? (
+                <div className="pr-1.5 text-right text-[18px] font-extrabold leading-none">
+                  {kmNumber(meters)}
+                  <small className="mt-0.5 block font-mono text-[10px] font-normal text-muted">KM</small>
                 </div>
-              </li>
-            );
-          })}
-          {rows.length === 0 && (
-            <li className="px-5 py-4 text-sm text-muted">No places on this trip yet.</li>
-          )}
-        </ul>
-        {untimed > 0 && (
-          <p className="px-5 pb-5 pt-1 text-[13px] text-faint">
-            {untimed} {untimed === 1 ? "place" : "places"} without a time.
-          </p>
-        )}
-      </section>
-    </main>
+              ) : (
+                <span />
+              )}
+            </li>
+          );
+        })}
+        {rows.length === 0 && <li className="mt-4 px-1 text-sm text-muted">No places on this trip yet.</li>}
+      </ul>
+      {untimed > 0 && (
+        <p className="mt-3 px-1 text-[13px] text-faint">
+          {untimed} {untimed === 1 ? "place" : "places"} without a time.
+        </p>
+      )}
+    </section>
   );
 }

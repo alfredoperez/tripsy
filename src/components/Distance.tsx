@@ -19,6 +19,7 @@ import {
 } from "@/lib/mapbox";
 import { supabase } from "@/lib/supabase";
 import type { StopKind } from "@/lib/types";
+import { CarIcon, WalkIcon } from "./icons";
 
 /** Something on the itinerary you could walk or drive to. */
 export type Place = {
@@ -27,7 +28,7 @@ export type Place = {
   /** "Sat Oct 31", or "Done". */
   dayLabel: string;
   kind: StopKind;
-  icon: string;
+  imageUrl: string | null;
   title: string;
   address: string | null;
   mapUrl: string | null;
@@ -206,60 +207,45 @@ export function useNearby(): NearbyApi {
   return { status, message, results, updatedAt, locate: (places) => void locate(places) };
 }
 
-function Chip({
-  href,
-  label,
-  children,
-  dim,
-  raised,
-}: {
-  href?: string;
-  label?: string;
-  children: React.ReactNode;
-  dim?: boolean;
-  raised?: boolean;
-}) {
-  const className = `inline-flex items-center gap-1 whitespace-nowrap rounded-full ${
-    raised ? "bg-panel" : "bg-background"
-  } px-2.5 py-1 font-mono text-[11px] font-medium tabular-nums text-ink ${
-    dim ? "opacity-45" : ""
-  }`;
-  if (!href) return <span className={className}>{children}</span>;
-  return (
-    <a href={href} target="_blank" rel="noreferrer" aria-label={label} className={className}>
-      {children}
-    </a>
-  );
-}
-
-/** `🚶 18 min · 🚗 7 min · 1.4 km`, each time a link to Google Maps directions. */
-export function TravelChips({ travel, raised }: { travel: Travel; raised?: boolean }) {
+/** `walk 18 min · car 7 min · 1.4 km`, each time a link to Google Maps directions. */
+export function TravelLine({ travel, km = true }: { travel: Travel; km?: boolean }) {
   const meters = travel.walk?.meters ?? travel.drive?.meters ?? null;
+  const link =
+    "inline-flex items-center gap-1 whitespace-nowrap rounded-full tabular-nums focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink";
   return (
-    <div className="flex flex-wrap gap-1.5">
+    <span className="inline-flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 font-mono text-[11px] text-muted">
       {travel.walk && (
-        <Chip
+        <a
           href={directionsUrl(travel.to, "walking", travel.from)}
-          label={`Walk ${formatMinutes(travel.walk.minutes)}, walking directions`}
-          dim={travel.walk.minutes > WALK_TOO_LONG_MIN}
-          raised={raised}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={`Walk ${formatMinutes(travel.walk.minutes)}, walking directions`}
+          className={`${link} ${travel.walk.minutes > WALK_TOO_LONG_MIN ? "opacity-55" : ""}`}
         >
-          <span aria-hidden>🚶</span>
+          <WalkIcon className="h-[13px] w-[13px]" />
           {formatMinutes(travel.walk.minutes)}
-        </Chip>
+        </a>
       )}
+      {travel.walk && travel.drive && <span aria-hidden>·</span>}
       {travel.drive && (
-        <Chip
+        <a
           href={directionsUrl(travel.to, "driving", travel.from)}
-          label={`Drive ${formatMinutes(travel.drive.minutes)}, driving directions`}
-          raised={raised}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={`Drive ${formatMinutes(travel.drive.minutes)}, driving directions`}
+          className={link}
         >
-          <span aria-hidden>🚗</span>
+          <CarIcon className="h-[13px] w-[13px]" />
           {formatMinutes(travel.drive.minutes)}
-        </Chip>
+        </a>
       )}
-      {meters !== null && <Chip raised={raised}>{formatKm(meters)}</Chip>}
-    </div>
+      {km && meters !== null && (
+        <>
+          <span aria-hidden>·</span>
+          <span className="whitespace-nowrap">{formatKm(meters)}</span>
+        </>
+      )}
+    </span>
   );
 }
 

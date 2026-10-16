@@ -1,14 +1,21 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { hasMapbox } from "@/lib/mapbox";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CLAUDE_PROJECT_URL } from "@/lib/links";
 import { supabase } from "@/lib/supabase";
 import { hotelName, isCheckOut, mapsSearch, parseFlight } from "@/lib/tickets";
-import { fetchTrip, formatDate, isFlight, KIND_ICON, lodgingByDay, shortDate, todayIn } from "@/lib/trip";
+import { fetchTrip, formatDate, isFlight, lodgingByDay, shortDate, todayIn } from "@/lib/trip";
 import type { Day, Leg, Stop, Trip } from "@/lib/types";
+import { useNearby, type NearbyApi } from "./Distance";
+import { BackIcon, ClaudeIcon, KindIcon, ListIcon, NearIcon } from "./icons";
+import { nearbyPlaces, NearbyPanel } from "./Nearby";
 import { Connector, RouteDayButton, useDayRoutes, type RouteApi } from "./Routes";
-import { CopyCode, FlightTicket, HotelTicket } from "./Tickets";
+import { StopDetails, StopRowButton, SwipeRow, TicketShell } from "./StopCard";
+import { MoveDaySheet, Toast, useStopEdits, type StopEditApi, type ToastState } from "./StopEdits";
+import { FlightTicket, HotelTicket } from "./Tickets";
+
+export type Tab = "itinerary" | "nearby";
 
 const HIGHLIGHT_MS = 4000;
 const REFETCH_DEBOUNCE_MS = 500;
@@ -37,15 +44,22 @@ function patchStopCoords(trip: Trip, id: string, lat: number | null, lng: number
   };
 }
 
-export function TripView({ slug }: { slug: string }) {
+export function TripView({ slug, initialTab = "itinerary" }: { slug: string; initialTab?: Tab }) {
   const [trip, setTrip] = useState<Trip | null>(null);
   const [missing, setMissing] = useState(false);
   const [live, setLive] = useState(false);
   const [showPast, setShowPast] = useState(false);
   const [changed, setChanged] = useState<Set<string>>(new Set());
+  const [tab, setTab] = useState<Tab>(initialTab);
   const todayRef = useRef<HTMLElement | null>(null);
   const scrolled = useRef(false);
   const routes = useDayRoutes();
+  const nearby = useNearby();
+
+  const reload = useCallback(() => {
+    fetchTrip(slug).then((data) => data && setTrip(data));
+  }, [slug]);
+  const { api: edits, toast } = useStopEdits({ trip, setTrip, persist: true, reload });
 
   useEffect(() => {
     let cancelled = false;
@@ -127,10 +141,21 @@ export function TripView({ slug }: { slug: string }) {
   }, [trip, showPast, today]);
 
   useEffect(() => {
-    if (scrolled.current || !todayRef.current) return;
+    if (scrolled.current || tab !== "itinerary" || !todayRef.current) return;
     scrolled.current = true;
     todayRef.current.scrollIntoView({ block: "start" });
-  }, [visibleCount]);
+  }, [visibleCount, tab]);
+
+  // Switching tabs keeps the page, only the address changes, so
+  // /t/<slug>/nearby still opens straight on Nearby.
+  const switchTab = useCallback(
+    (next: Tab) => {
+      setTab(next);
+      window.history.replaceState(null, "", next === "nearby" ? `/t/${slug}/nearby` : `/t/${slug}`);
+      window.scrollTo({ top: 0 });
+    },
+    [slug],
+  );
 
   if (missing) {
     return <p className="p-8 text-muted">No trip called “{slug}”.</p>;
@@ -151,14 +176,30 @@ export function TripView({ slug }: { slug: string }) {
       changed={changed}
       todayRef={todayRef}
       routes={routes}
-      nearbyHref={hasMapbox ? `/t/${slug}/nearby` : undefined}
+      tab={tab}
+      onTab={switchTab}
+      nearby={nearby}
+      edits={edits}
+      toast={toast}
     />
   );
 }
 
+/** Drops stops waiting on a delete, so every count and connector agrees. */
+function withoutHidden(trip: Trip, hidden: ReadonlySet<string>): Trip {
+  if (hidden.size === 0) return trip;
+  return {
+    ...trip,
+    days: trip.days.map((day) => ({
+      ...day,
+      stops: day.stops.filter((s) => !hidden.has(s.id) && !(s.parent_stop_id && hidden.has(s.parent_stop_id))),
+    })),
+  };
+}
+
 /** The trip page itself, from data alone. Also rendered by the dev preview. */
 export function TripScreen({
-  trip,
+  trip: fullTrip,
   today,
   live,
   showPast,
@@ -166,7 +207,12 @@ export function TripScreen({
   changed,
   todayRef,
   routes,
-  nearbyHref,
+  tab,
+  onTab,
+  nearby,
+  edits,
+  toast,
+  initialOpen = [],
 }: {
   trip: Trip;
   today: string;
@@ -177,101 +223,179 @@ export function TripScreen({
   todayRef?: React.Ref<HTMLElement>;
   /** Stop-to-stop times; undefined hides "Route this day" and the connectors. */
   routes?: RouteApi;
-  /** Where the "Nearby" pill goes; undefined hides it. */
-  nearbyHref?: string;
+  tab: Tab;
+  onTab: (tab: Tab) => void;
+  nearby: NearbyApi;
+  edits: StopEditApi;
+  toast: ToastState;
+  /** Stops shown opened at first (the dev preview). */
+  initialOpen?: string[];
 }) {
+  const trip = useMemo(() => withoutHidden(fullTrip, edits.hidden), [fullTrip, edits.hidden]);
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set(initialOpen));
+  const [moving, setMoving] = useState<Stop | null>(null);
   const days = [...trip.days].sort((a, b) => a.date.localeCompare(b.date));
   const pastDays = days.filter((day) => day.date < today);
   const visibleDays = showPast ? days : days.filter((day) => day.date >= today);
   const lodgingDays = lodgingByDay(trip.legs ?? [], days);
   const shortSubtitle = trip.subtitle && trip.subtitle.length <= 32;
+  const places = useMemo(() => nearbyPlaces(trip, today), [trip, today]);
+  const closeMove = useCallback(() => setMoving(null), []);
+
+  const toggle = useCallback((id: string) => {
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  const stopUi: StopUi = { open, toggle, edits, onMove: setMoving, changed };
 
   return (
-    <main className="mx-auto w-full max-w-2xl px-4 pb-24 pt-5">
-      <div className="flex items-center justify-between">
-        <Link
-          href="/"
-          aria-label="All trips"
-          className="flex h-10 w-10 items-center justify-center rounded-full bg-panel text-ink"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M15 18 9 12l6-6" />
-          </svg>
-        </Link>
-        <div className="flex items-center gap-2">
-          {nearbyHref && (
-            <Link
-              href={nearbyHref}
-              className="flex items-center gap-1.5 rounded-full bg-accent px-3 py-2 font-mono text-[11px] font-semibold uppercase tracking-widest text-ink active:scale-[0.97] motion-reduce:active:scale-100"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden className="h-3.5 w-3.5" fill="currentColor">
-                <path d="M21.4 2.6a1 1 0 0 0-1.1-.2l-17 7.5a1 1 0 0 0 .1 1.9l7.1 2.1 2.1 7.1a1 1 0 0 0 1.9.1l7.5-17a1 1 0 0 0-.6-1.5Z" />
-              </svg>
-              Nearby
-            </Link>
-          )}
+    <>
+      <main className="mx-auto w-full max-w-2xl px-4 pb-32 pt-5">
+        <div className="flex items-center justify-between">
+          <Link
+            href="/"
+            aria-label="All trips"
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-panel text-ink focus-visible:outline-2 focus-visible:outline-ink"
+          >
+            <BackIcon className="h-5 w-5" />
+          </Link>
           <div
-            className={`flex items-center gap-2 rounded-full px-3 py-2 font-mono text-[11px] uppercase tracking-widest ${
+            className={`flex items-center gap-2 rounded-full px-3.5 py-2 font-mono text-[11px] uppercase tracking-widest ${
               live ? "bg-ink text-white" : "bg-panel text-muted"
             }`}
           >
-            <span className={`h-2 w-2 rounded-full ${live ? "bg-live" : "bg-faint"}`} aria-hidden />
+            <span className={`h-[7px] w-[7px] rounded-full ${live ? "bg-live" : "bg-faint"}`} aria-hidden />
             {live ? "Live" : "Connecting"}
           </div>
         </div>
-      </div>
 
-      <h1 className="headline mt-8 text-[clamp(2.4rem,12vw,3.75rem)] [overflow-wrap:anywhere]">
-        {trip.title}
-      </h1>
-      {trip.subtitle &&
-        (shortSubtitle ? (
-          <p className="headline-light mt-1 text-[clamp(1.5rem,7vw,2.25rem)]">{trip.subtitle}</p>
-        ) : (
-          <p className="mt-3 text-[15px] font-light leading-snug text-muted">{trip.subtitle}</p>
-        ))}
+        <h1 className="headline mt-6 text-[clamp(2.4rem,12vw,3.75rem)] [overflow-wrap:anywhere]">
+          {trip.title}
+        </h1>
+        {trip.subtitle &&
+          (shortSubtitle ? (
+            <p className="headline-light mt-1 text-[clamp(1.5rem,7vw,2.25rem)]">{trip.subtitle}</p>
+          ) : (
+            <p className="mt-3 text-[15px] font-light leading-snug text-muted">{trip.subtitle}</p>
+          ))}
 
-      <div className="mt-5 flex flex-wrap items-center gap-2">
-        <span className="rounded-full bg-accent px-3.5 py-1.5 text-[13px] font-semibold uppercase tracking-wide text-ink">
-          {shortDate(trip.start_date)} → {shortDate(trip.end_date)}
-        </span>
-        <span className="rounded-full bg-panel px-3.5 py-1.5 text-[13px] font-medium uppercase tracking-wide text-muted">
-          {days.length} days
-        </span>
-      </div>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <span className="rounded-full bg-accent px-3.5 py-1.5 text-[13px] font-semibold uppercase tracking-wide text-ink">
+            {shortDate(trip.start_date)} → {shortDate(trip.end_date)}
+          </span>
+          <span className="rounded-full bg-panel px-3.5 py-1.5 text-[13px] font-medium uppercase tracking-wide text-muted">
+            {days.length} days
+          </span>
+        </div>
 
-      {pastDays.length > 0 && (
-        <button
-          type="button"
-          onClick={onTogglePast}
-          className="mt-8 w-full rounded-full bg-ink px-5 py-3.5 text-[13px] font-semibold uppercase tracking-wider text-white"
-        >
-          {showPast ? "Hide" : "Show"} past days · {pastDays.length}
-        </button>
+        <div id="panel-itinerary" role="tabpanel" aria-labelledby="tab-itinerary" hidden={tab !== "itinerary"}>
+          {pastDays.length > 0 && (
+            <button
+              type="button"
+              onClick={onTogglePast}
+              className="mt-7 w-full rounded-full bg-ink px-5 py-3.5 text-[13px] font-semibold uppercase tracking-wider text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+            >
+              {showPast ? "Hide" : "Show"} past days · {pastDays.length}
+            </button>
+          )}
+
+          <div className="mt-5 space-y-4">
+            {visibleDays.map((day) => (
+              <DayCard
+                key={day.id}
+                trip={trip}
+                day={day}
+                number={days.indexOf(day) + 1}
+                isToday={day.date === today}
+                isPast={day.date < today}
+                lodging={lodgingDays.get(day.id)}
+                sectionRef={day.date === today ? todayRef : undefined}
+                routes={routes}
+                ui={stopUi}
+              />
+            ))}
+            {visibleDays.length === 0 && (
+              <p className="text-muted">This trip is over. Show past days to look back.</p>
+            )}
+          </div>
+        </div>
+
+        <div id="panel-nearby" role="tabpanel" aria-labelledby="tab-nearby" hidden={tab !== "nearby"}>
+          <NearbyPanel places={places} api={nearby} />
+        </div>
+      </main>
+
+      <TabBar tab={tab} onTab={onTab} />
+      <Toast toast={toast} />
+      {moving && (
+        <MoveDaySheet
+          stop={moving}
+          days={days}
+          onClose={closeMove}
+          onPick={(day) => {
+            edits.moveTo(moving, day);
+            setMoving(null);
+          }}
+        />
       )}
-
-      <div className="mt-6 space-y-4">
-        {visibleDays.map((day) => (
-          <DayCard
-            key={day.id}
-            trip={trip}
-            day={day}
-            number={days.indexOf(day) + 1}
-            isToday={day.date === today}
-            isPast={day.date < today}
-            changed={changed}
-            lodging={lodgingDays.get(day.id)}
-            sectionRef={day.date === today ? todayRef : undefined}
-            routes={routes}
-          />
-        ))}
-        {visibleDays.length === 0 && (
-          <p className="text-muted">This trip is over. Show past days to look back.</p>
-        )}
-      </div>
-    </main>
+    </>
   );
 }
+
+function TabBar({ tab, onTab }: { tab: Tab; onTab: (tab: Tab) => void }) {
+  const item =
+    "flex items-center gap-[7px] rounded-full px-4 py-[11px] text-[13px] font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
+  const tabs: { value: Tab; label: string; icon: React.ReactNode }[] = [
+    { value: "itinerary", label: "Itinerary", icon: <ListIcon className="h-[17px] w-[17px]" /> },
+    { value: "nearby", label: "Nearby", icon: <NearIcon className="h-[17px] w-[17px]" /> },
+  ];
+  return (
+    <nav
+      aria-label="Trip views"
+      className="fixed left-1/2 z-30 flex -translate-x-1/2 gap-1 rounded-full bg-ink p-1.5 shadow-[0_10px_30px_rgba(17,17,17,0.25)]"
+      style={{ bottom: "calc(14px + env(safe-area-inset-bottom, 0px))" }}
+    >
+      <div role="tablist" aria-label="Trip views" className="flex gap-1">
+        {tabs.map((t) => (
+          <button
+            key={t.value}
+            id={`tab-${t.value}`}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.value}
+            aria-controls={`panel-${t.value}`}
+            onClick={() => onTab(t.value)}
+            className={`${item} ${tab === t.value ? "bg-accent text-ink" : "text-[#bdbdb6]"}`}
+          >
+            {t.icon}
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <a
+        href={CLAUDE_PROJECT_URL}
+        target="_blank"
+        rel="noreferrer"
+        aria-label="Ask Claude about this trip"
+        className={`${item} text-white`}
+      >
+        <ClaudeIcon className="h-[17px] w-[17px]" />
+      </a>
+    </nav>
+  );
+}
+
+type StopUi = {
+  open: ReadonlySet<string>;
+  toggle: (id: string) => void;
+  edits: StopEditApi;
+  onMove: (stop: Stop) => void;
+  changed: Set<string>;
+};
 
 function DayCard({
   trip,
@@ -279,21 +403,22 @@ function DayCard({
   number,
   isToday,
   isPast,
-  changed,
   lodging,
   sectionRef,
   routes,
+  ui,
 }: {
   trip: Trip;
   day: Day;
   number: number;
   isToday: boolean;
   isPast: boolean;
-  changed: Set<string>;
   lodging?: Leg;
   sectionRef?: React.Ref<HTMLElement>;
   routes?: RouteApi;
+  ui: StopUi;
 }) {
+  const { changed } = ui;
   const stops = [...day.stops].sort((a, b) => a.position - b.position);
   const topLevel = stops.filter((stop) => !stop.parent_stop_id);
   const [weekday, ...rest] = formatDate(day.date).split(" ");
@@ -305,9 +430,9 @@ function DayCard({
         isToday ? "ring-2 ring-ink" : ""
       } ${isPast ? "opacity-60" : ""} ${changed.has(day.id) ? "just-changed" : ""}`}
     >
-      <header className="flex items-center gap-4 px-5 pb-4 pt-5">
+      <header className="flex items-center gap-3.5 px-[18px] pb-2 pt-[18px]">
         <div
-          className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-[17px] font-semibold tabular-nums ${
+          className={`flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-full text-[17px] font-semibold tabular-nums ${
             isToday ? "bg-accent text-ink" : "bg-background text-ink"
           }`}
         >
@@ -315,18 +440,18 @@ function DayCard({
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
-            <h2 className="headline text-[26px]">{weekday.replace(",", "")}</h2>
-            <span className="headline-light text-[22px]">{rest.join(" ")}</span>
+            <h2 className="headline text-[24px]">{weekday.replace(",", "")}</h2>
+            <span className="headline-light text-[20px]">{rest.join(" ")}</span>
           </div>
           {day.title && (
-            <p className="mt-1 text-[14px] font-light leading-snug text-muted">{day.title}</p>
+            <p className="mt-0.5 text-[14px] font-light leading-snug text-muted">{day.title}</p>
           )}
           {routes && (
             <RouteDayButton state={routes.dayState(day)} onTap={() => routes.routeDay(day, trip)} />
           )}
         </div>
         {isToday ? (
-          <span className="shrink-0 self-start rounded-full bg-accent px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-wider text-ink">
+          <span className="shrink-0 self-start rounded-full bg-accent px-2 py-[5px] font-mono text-[10px] font-semibold uppercase tracking-wider text-ink">
             Today
           </span>
         ) : (
@@ -337,7 +462,7 @@ function DayCard({
           )
         )}
       </header>
-      <ul className="divide-y divide-line pb-1">
+      <ul className="pb-2">
         {topLevel.map((stop, i) => {
           const prev = topLevel[i - 1];
           const link = prev && routes && !isFlight(prev) && !isFlight(stop) ? routes.connector(prev, stop) : null;
@@ -346,8 +471,9 @@ function DayCard({
               {link && <Connector state={link} />}
               <StopItem
                 stop={stop}
+                day={day}
                 nested={stops.filter((child) => child.parent_stop_id === stop.id)}
-                changed={changed}
+                ui={ui}
               />
             </Fragment>
           );
@@ -375,130 +501,88 @@ function DayCard({
           <li className="px-5 py-4 text-sm text-muted">Nothing planned.</li>
         )}
       </ul>
+      {isToday && topLevel.length > 0 && (
+        <p className="pb-2.5 text-center font-mono text-[10px] uppercase tracking-wide text-faint">
+          Swipe a stop left to remove it
+        </p>
+      )}
     </section>
   );
 }
 
 /** Picks the boarding pass, the hotel card, or a plain row for a stop. */
-function StopItem({
-  stop,
-  nested,
-  changed,
-}: {
-  stop: Stop;
-  nested: Stop[];
-  changed: Set<string>;
-}) {
+function StopItem({ stop, day, nested, ui }: { stop: Stop; day: Day; nested: Stop[]; ui: StopUi }) {
+  const { open, toggle, edits, onMove, changed } = ui;
   const flight = parseFlight(stop);
   const isStay = stop.kind === "stay";
-  if (!flight && !isStay) return <StopRow stop={stop} nested={nested} changed={changed} />;
+  const isOpen = open.has(stop.id);
+  const panelId = `stop-${stop.id}`;
+  const details = isOpen && (
+    <StopDetails
+      stop={stop}
+      id={panelId}
+      dayDate={day.date}
+      api={edits}
+      onMove={() => onMove(stop)}
+      ticket={Boolean(flight || isStay)}
+    />
+  );
+
+  if (!flight && !isStay) {
+    return (
+      <li>
+        <SwipeRow onRemove={() => edits.swipeRemove(stop)}>
+          <StopRowButton
+            stop={stop}
+            open={isOpen}
+            panelId={panelId}
+            onToggle={() => toggle(stop.id)}
+            flash={changed.has(stop.id)}
+          />
+        </SwipeRow>
+        {details}
+        {nested.length > 0 && (
+          <div className="pb-2 pl-[94px] pr-[18px]">
+            <NestedStops nested={nested} changed={changed} />
+          </div>
+        )}
+      </li>
+    );
+  }
 
   const name = hotelName(stop.title);
   return (
     <li className={`px-3 py-3 ${changed.has(stop.id) ? "just-changed" : ""}`}>
-      {flight ? (
-        <FlightTicket
-          flight={flight}
-          bookingCode={stop.booking_code}
-          mapUrl={stop.map_url || mapsSearch(`${flight.from} airport`)}
-          note={stop.note}
-          booked={stop.booked}
-          done={stop.done}
-        />
-      ) : (
-        <HotelTicket
-          label={isCheckOut(stop.title) ? "Check-out" : "Check-in"}
-          name={name}
-          time={stop.time_label}
-          address={stop.address}
-          note={stop.note}
-          bookingCode={stop.booking_code}
-          mapUrl={stop.map_url || mapsSearch(stop.address || name)}
-          booked={stop.booked}
-          done={stop.done}
-        />
-      )}
+      <TicketShell title={stop.title} open={isOpen} panelId={panelId} onToggle={() => toggle(stop.id)}>
+        {flight ? (
+          <FlightTicket
+            flight={flight}
+            bookingCode={stop.booking_code}
+            mapUrl={stop.map_url || mapsSearch(`${flight.from} airport`)}
+            note={stop.note}
+            booked={stop.booked}
+            done={stop.done}
+          />
+        ) : (
+          <HotelTicket
+            label={isCheckOut(stop.title) ? "Check-out" : "Check-in"}
+            name={name}
+            time={stop.time_label}
+            address={stop.address}
+            note={stop.note}
+            bookingCode={stop.booking_code}
+            mapUrl={stop.map_url || mapsSearch(stop.address || name)}
+            booked={stop.booked}
+            done={stop.done}
+          />
+        )}
+      </TicketShell>
+      {details}
       {nested.length > 0 && (
         <div className="px-2 pt-3">
           <NestedStops nested={nested} changed={changed} />
         </div>
       )}
-    </li>
-  );
-}
-
-function StopRow({
-  stop,
-  nested,
-  changed,
-}: {
-  stop: Stop;
-  nested: Stop[];
-  changed: Set<string>;
-}) {
-  return (
-    <li className={`px-5 py-4 ${changed.has(stop.id) ? "just-changed" : ""}`}>
-      <div className="flex gap-3.5">
-        <div
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-background text-[17px]"
-          aria-hidden
-        >
-          {KIND_ICON[stop.kind]}
-        </div>
-        <div className="min-w-0 flex-1">
-          {stop.time_label && (
-            <div className="font-mono text-[11px] font-medium uppercase tracking-wide text-muted">
-              {stop.time_label}
-            </div>
-          )}
-          <div className="flex items-start gap-2">
-            <div className="min-w-0 flex-1">
-              <span
-                className={`text-[16px] font-semibold leading-snug ${
-                  stop.done ? "text-muted line-through" : ""
-                }`}
-              >
-                {stop.title}
-              </span>
-              {(stop.done || stop.booked) && (
-                <span className="ml-2 inline-flex -translate-y-px gap-1 align-middle">
-                  {stop.done && <Tag tone="ink">Done</Tag>}
-                  {stop.booked && <Tag tone="lime">Booked</Tag>}
-                </span>
-              )}
-            </div>
-            {stop.map_url && (
-              <a
-                href={stop.map_url}
-                target="_blank"
-                rel="noreferrer"
-                aria-label={`${stop.title} on the map`}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-ink text-accent"
-              >
-                <svg viewBox="0 0 24 24" aria-hidden className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M7 17 17 7M8 7h9v9" />
-                </svg>
-              </a>
-            )}
-          </div>
-          {stop.note && (
-            <p className="mt-1 text-[14px] font-light leading-snug text-muted">{stop.note}</p>
-          )}
-          {stop.address && (
-            <p className="mt-1 font-mono text-[11px] leading-snug text-faint">{stop.address}</p>
-          )}
-          {stop.booking_code && (
-            <div className="mt-2 inline-block max-w-full rounded-2xl bg-background px-3 py-2">
-              <CopyCode code={stop.booking_code} tone="light" />
-            </div>
-          )}
-          {nested.length > 0 && (
-            <div className="mt-3">
-              <NestedStops nested={nested} changed={changed} />
-            </div>
-          )}
-        </div>
-      </div>
     </li>
   );
 }
@@ -509,29 +593,17 @@ function NestedStops({ nested, changed }: { nested: Stop[]; changed: Set<string>
       {nested.map((child) => (
         <li
           key={child.id}
-          className={`flex gap-2.5 rounded-2xl bg-background px-3 py-2.5 text-[14px] ${
+          className={`flex items-start gap-2.5 rounded-2xl bg-background px-3 py-2.5 text-[14px] ${
             changed.has(child.id) ? "just-changed" : ""
           }`}
         >
-          <span aria-hidden>{KIND_ICON[child.kind]}</span>
+          <KindIcon kind={child.kind} className="mt-0.5 h-4 w-4 shrink-0" />
           <div className="min-w-0 flex-1">
-            <span className="font-semibold">{child.title}</span>
+            <span className={`font-semibold ${child.done ? "text-faint line-through" : ""}`}>{child.title}</span>
             {child.note && <span className="font-light text-muted"> · {child.note}</span>}
           </div>
         </li>
       ))}
     </ul>
-  );
-}
-
-function Tag({ children, tone }: { children: React.ReactNode; tone: "lime" | "ink" }) {
-  return (
-    <span
-      className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider ${
-        tone === "lime" ? "bg-accent text-ink" : "bg-ink text-white"
-      }`}
-    >
-      {children}
-    </span>
   );
 }

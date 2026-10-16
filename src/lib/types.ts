@@ -23,6 +23,8 @@ export type Stop = {
   booked: boolean;
   done: boolean;
   image_path: string | null;
+  /** A photo of the place, from anywhere on the web. Missing or broken shows a gradient. */
+  image_url: string | null;
   /** Filled on demand the first time someone asks how far the stop is. */
   lat: number | null;
   lng: number | null;

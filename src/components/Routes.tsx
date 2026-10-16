@@ -6,10 +6,11 @@
 
 import { useCallback, useState } from "react";
 import { getLeg, legKey, putLegs } from "@/lib/legCache";
-import { crowFlies, hasMapbox, pairTimes, type LatLng, type Travel } from "@/lib/mapbox";
+import { crowFlies, directionsUrl, hasMapbox, pairTimes, type LatLng, type Travel } from "@/lib/mapbox";
 import { isFlight, isPlaceable, stopPlace } from "@/lib/trip";
 import type { Day, Stop, Trip } from "@/lib/types";
-import { centroid, knownCoords, lookedUp, NO_TIMES, resolveCoords, TravelChips } from "./Distance";
+import { centroid, knownCoords, lookedUp, NO_TIMES, resolveCoords, TravelLine } from "./Distance";
+import { GoogleMapsIcon } from "./icons";
 
 export type ConnectorState = { status: "loading" } | { status: "done"; travel: Travel };
 
@@ -204,16 +205,25 @@ export function RouteDayButton({ state, onTap }: { state: DayRouteState; onTap: 
 /** The slim row between two stops: how to get from the previous one to this one. */
 export function Connector({ state }: { state: ConnectorState }) {
   return (
-    <li className="flex items-center gap-3.5 border-b-0 px-5 pb-1 pt-2.5" aria-label="From the previous stop">
-      <div className="flex w-10 shrink-0 justify-center self-stretch" aria-hidden>
-        <span className="w-0 border-l-2 border-dotted border-faint" />
-      </div>
+    <li className="flex h-[30px] items-center pl-[49px] pr-[18px]" aria-label="From the previous stop">
+      <span className="mr-[18px] h-full w-0 shrink-0 border-l-2 border-dotted border-faint" aria-hidden />
       {state.status === "loading" ? (
-        <p className="py-1 font-mono text-[11px] uppercase tracking-wide text-muted motion-safe:animate-pulse">
+        <span className="font-mono text-[11px] uppercase tracking-wide text-muted motion-safe:animate-pulse">
           Timing…
-        </p>
+        </span>
       ) : (
-        <TravelChips travel={state.travel} />
+        <>
+          <TravelLine travel={state.travel} />
+          <a
+            href={directionsUrl(state.travel.to, "driving", state.travel.from)}
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Directions from the previous stop in Google Maps"
+            className="-mr-1.5 ml-auto flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full focus-visible:outline-2 focus-visible:outline-ink"
+          >
+            <GoogleMapsIcon className="h-[15px] w-[15px]" />
+          </a>
+        </>
       )}
     </li>
   );

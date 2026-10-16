@@ -3,17 +3,13 @@
 import type { Session } from "@supabase/supabase-js";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { supabase } from "@/lib/supabase";
+import { AppMark } from "./icons";
 
 const noop = () => () => {};
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
   // undefined = still checking, null = signed out.
   const [session, setSession] = useState<Session | null | undefined>(undefined);
-  const [email, setEmail] = useState("");
-  const [code, setCode] = useState("");
-  const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error" | "bad-code">(
-    "idle",
-  );
 
   useEffect(() => {
     const { data } = supabase.auth.onAuthStateChange((_event, next) => setSession(next));
@@ -31,6 +27,16 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   }
   if (session === undefined) return null;
   if (session) return <>{children}</>;
+  return <SignIn />;
+}
+
+/** The sign-in screen: email link, or the code from the same email. Also in the dev preview. */
+export function SignIn() {
+  const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error" | "bad-code">(
+    "idle",
+  );
 
   async function sendLink(event: React.FormEvent) {
     event.preventDefault();
@@ -50,35 +56,34 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     if (error) setStatus("bad-code");
   }
 
+  const field =
+    "h-[52px] w-full rounded-full bg-panel px-5 text-[16px] outline-none placeholder:text-faint focus-visible:ring-2 focus-visible:ring-ink";
+  const pill =
+    "flex h-[52px] w-full items-center justify-center rounded-full text-[14px] font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink active:scale-[0.98] disabled:opacity-60 motion-reduce:active:scale-100";
+
   return (
-    <main className="mx-auto w-full max-w-sm px-4 pb-16 pt-20">
-      <h1 className="headline text-[clamp(3rem,15vw,4.5rem)]">Tripsy</h1>
-      <p className="headline-light mt-1 text-[clamp(1.5rem,7vw,2rem)]">
-        <span className="rounded-full bg-accent px-3">Sign in</span>
-      </p>
-      <p className="mt-6 text-[15px] font-light leading-snug text-muted">
-        Use the email your trip is shared with.
-      </p>
-      <form onSubmit={sendLink} className="mt-6 space-y-3">
+    <main className="mx-auto flex w-full max-w-sm flex-1 flex-col px-4 pb-16 pt-16">
+      <AppMark className="h-16 w-16" />
+      <h1 className="headline mt-8 text-[clamp(3.5rem,19vw,5rem)]">Tripsy</h1>
+      <p className="mt-3 text-[20px] font-light leading-snug">Your trips, live with whoever’s coming.</p>
+      <p className="mt-8 text-[14px] text-muted">Use the email your trip is shared with.</p>
+      <form onSubmit={sendLink} className="mt-3 space-y-2.5">
         <input
           type="email"
           required
           autoComplete="email"
+          aria-label="Email"
           value={email}
           onChange={(event) => setEmail(event.target.value)}
           placeholder="you@example.com"
-          className="w-full rounded-full bg-panel px-5 py-3.5 text-[16px] outline-none ring-ink focus:ring-2"
+          className={field}
         />
-        <button
-          type="submit"
-          disabled={status === "sending"}
-          className="w-full rounded-full bg-ink px-5 py-3.5 text-[13px] font-semibold uppercase tracking-wider text-white disabled:opacity-60"
-        >
+        <button type="submit" disabled={status === "sending"} className={`${pill} bg-ink text-white`}>
           {status === "sending" ? "Sending…" : "Email me a sign-in link"}
         </button>
       </form>
       {(status === "sent" || status === "bad-code") && (
-        <form onSubmit={verifyCode} className="mt-8 space-y-3">
+        <form onSubmit={verifyCode} className="mt-8 space-y-2.5">
           <p className="flex items-center gap-2 text-[14px]">
             <span className="h-2 w-2 shrink-0 rounded-full bg-accent ring-2 ring-ink" aria-hidden />
             Check your email. Tap the link, or type the code here.
@@ -86,15 +91,13 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
           <input
             inputMode="numeric"
             autoComplete="one-time-code"
+            aria-label="Code from the email"
             value={code}
             onChange={(event) => setCode(event.target.value.trim())}
             placeholder="Code from the email"
-            className="w-full rounded-full bg-panel px-5 py-3.5 font-mono text-[16px] tracking-widest outline-none ring-ink focus:ring-2"
+            className={`${field} font-mono tracking-widest`}
           />
-          <button
-            type="submit"
-            className="w-full rounded-full bg-accent px-5 py-3.5 text-[13px] font-semibold uppercase tracking-wider text-ink"
-          >
+          <button type="submit" className={`${pill} bg-accent text-ink`}>
             Sign in with code
           </button>
           {status === "bad-code" && (

@@ -18,6 +18,7 @@
   --color-faint: #a3a39d;
   --color-accent: #d4f53c;
   --color-live: #d4f53c;
+  --color-danger: #c4321c;
   --font-sans: var(--font-inter-tight);
   --font-mono: var(--font-geist-mono);
 }
@@ -60,6 +61,51 @@ body {
     radial-gradient(circle var(--notch) at 100% calc(100% - var(--notch-y)), #0000 98%, #000) right / 51% 100% no-repeat;
 }
 
+/* Photo stand-ins: warm, food-and-street toned washes, one per kind. */
+.wash-1 { background: radial-gradient(circle at 30% 30%, #f0b46b, #b5532c 70%); }
+.wash-2 { background: radial-gradient(circle at 70% 40%, #f3d48a, #c9802f 70%); }
+.wash-3 { background: radial-gradient(circle at 40% 60%, #e9a0b6, #8e3b6e 75%); }
+.wash-4 { background: radial-gradient(circle at 50% 30%, #9fd3c7, #2f6f7e 75%); }
+.wash-5 { background: radial-gradient(circle at 60% 60%, #f5a35c, #6b2f8e 80%); }
+.wash-6 { background: radial-gradient(circle at 30% 70%, #c9d98b, #4f7a3a 75%); }
+
+/* Swipe a stop left to remove it: the red layer waits behind the row. */
+.swipe {
+  position: relative;
+  overflow: hidden;
+}
+.swipe-bg {
+  position: absolute;
+  inset: 0;
+  background: var(--color-danger);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-right: 26px;
+  font-weight: 600;
+  font-size: 14px;
+}
+.swipe-layer {
+  position: relative;
+  touch-action: pan-y;
+  transition: transform 0.2s ease;
+}
+.swipe-gone {
+  max-height: 0 !important;
+  transition: max-height 0.25s ease;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+}
+.toast-in { animation: toast-in 0.2s ease-out; }
+@keyframes sheet-in {
+  from { transform: translateY(100%); }
+}
+.sheet-in { animation: sheet-in 0.25s ease-out; }
+
 @keyframes changed {
   from {
     background-color: rgb(212 245 60 / 0.6);
@@ -73,8 +119,26 @@ body {
   animation: changed 4s ease-out;
 }
 
+/* Same flash on an opaque row (the swipe layer must hide the red behind it). */
+@keyframes changed-solid {
+  from {
+    background-color: #e9f99d;
+  }
+  to {
+    background-color: #ffffff;
+  }
+}
+.just-changed-solid {
+  animation: changed-solid 4s ease-out;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .just-changed {
+  .toast-in,
+  .sheet-in {
+    animation: none;
+  }
+  .just-changed,
+  .just-changed-solid {
     animation: none;
     outline: 2px solid var(--color-ink);
     outline-offset: -2px;
