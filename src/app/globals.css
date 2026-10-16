@@ -1,26 +1,94 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f2f2f0;
+  --foreground: #111111;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
+  /* Cards sit white on the gray page; ink is the black card and button. */
+  --color-panel: #ffffff;
+  --color-ink: #111111;
+  --color-ink-soft: #1d1d1d;
+  --color-paper: #ececea;
+  --color-line: #e3e3df;
+  --color-muted: #6f6f6a;
+  --color-faint: #a3a39d;
+  --color-accent: #d4f53c;
+  --color-live: #d4f53c;
+  --font-sans: var(--font-inter-tight);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-inter-tight), system-ui, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Heavy uppercase grotesk headline, paired with a light second line. */
+.headline {
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: -0.035em;
+  line-height: 0.92;
+}
+.headline-light {
+  font-weight: 300;
+  text-transform: uppercase;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+/*
+ * Ticket: a rounded card with a semicircle notch cut from each side, level
+ * with the perforation. --notch-y is measured from the bottom so the notch
+ * stays on the divider whatever the top half holds.
+ */
+.ticket {
+  --notch: 12px;
+  --notch-y: 76px;
+  border-radius: 24px;
+  -webkit-mask:
+    radial-gradient(circle var(--notch) at 0 calc(100% - var(--notch-y)), #0000 98%, #000) left / 51% 100% no-repeat,
+    radial-gradient(circle var(--notch) at 100% calc(100% - var(--notch-y)), #0000 98%, #000) right / 51% 100% no-repeat;
+  mask:
+    radial-gradient(circle var(--notch) at 0 calc(100% - var(--notch-y)), #0000 98%, #000) left / 51% 100% no-repeat,
+    radial-gradient(circle var(--notch) at 100% calc(100% - var(--notch-y)), #0000 98%, #000) right / 51% 100% no-repeat;
+}
+
+@keyframes changed {
+  from {
+    background-color: rgb(212 245 60 / 0.6);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+.just-changed {
+  animation: changed 4s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .just-changed {
+    animation: none;
+    outline: 2px solid var(--color-ink);
+    outline-offset: -2px;
+  }
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Installed on iOS the page runs under the status bar. */
+body {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
 }
