@@ -1,11 +1,13 @@
 // Every Mapbox call lives here. Nothing in this file runs on its own: each
-// function is called only after the person taps "Near me" or "How far?".
+// function is called only after a tap on "Route this day" or "Use my location".
 
 export type LatLng = { lat: number; lng: number };
 
 export type Leg = { minutes: number; meters: number };
 
 export type Travel = {
+  /** Where the directions start; the person's position or the previous stop. */
+  from?: LatLng;
   to: LatLng;
   walk: Leg | null;
   drive: Leg | null;
@@ -152,8 +154,88 @@ export async function travelTimes(from: LatLng, places: LatLng[]): Promise<Trave
   return places.map((to, i) => ({ to, walk: walk[i], drive: drive[i] }));
 }
 
-export function directionsUrl(to: LatLng, mode: "walking" | "driving") {
-  return `https://www.google.com/maps/dir/?api=1&destination=${to.lat},${to.lng}&travelmode=${mode}`;
+/**
+ * Walking and traffic-aware driving times for each pair, previous stop to the
+ * next. Consecutive pairs share a coordinate, so a day of N stops is one
+ * walking request (up to 25 coordinates) and ceil((N-1)/9) driving ones.
+ * Throws only when every request failed.
+ */
+export async function pairTimes(pairs: { from: LatLng; to: LatLng }[]) {
+  if (!TOKEN) throw new Error("No Mapbox token");
+  if (pairs.length === 0) return [];
+  const [walk, drive] = await Promise.all([
+    pairMatrix("walking", pairs),
+    pairMatrix("driving-traffic", pairs),
+  ]);
+  if (walk.every((leg) => !leg) && drive.every((leg) => !leg)) {
+    throw new Error("No travel times");
+  }
+  return pairs.map((_, i) => ({ walk: walk[i], drive: drive[i] }));
+}
+
+const MAX_COORDS: Record<Profile, number> = { walking: 25, "driving-traffic": 10 };
+
+function samePoint(a: LatLng, b: LatLng) {
+  return a.lat === b.lat && a.lng === b.lng;
+}
+
+async function pairMatrix(profile: Profile, pairs: { from: LatLng; to: LatLng }[]) {
+  const out: (Leg | null)[] = new Array(pairs.length).fill(null);
+  type Request = { coords: LatLng[]; items: { index: number; source: number; dest: number }[] };
+  const requests: Request[] = [];
+  let current: Request | null = null;
+  pairs.forEach((pair, index) => {
+    let chained = Boolean(current && samePoint(current.coords[current.coords.length - 1], pair.from));
+    if (!current || current.coords.length + (chained ? 1 : 2) > MAX_COORDS[profile]) {
+      current = { coords: [], items: [] };
+      requests.push(current);
+      chained = false;
+    }
+    if (!chained) current.coords.push(pair.from);
+    const source = current.coords.length - 1;
+    current.coords.push(pair.to);
+    current.items.push({ index, source, dest: current.coords.length - 1 });
+  });
+
+  await Promise.all(
+    requests.map(async ({ coords, items }) => {
+      const sources = [...new Set(items.map((item) => item.source))];
+      const dests = [...new Set(items.map((item) => item.dest))];
+      const params = new URLSearchParams({
+        sources: sources.join(";"),
+        destinations: dests.join(";"),
+        annotations: "duration,distance",
+        access_token: TOKEN ?? "",
+      });
+      const path = coords.map((p) => `${p.lng},${p.lat}`).join(";");
+      try {
+        const res = await fetch(
+          `https://api.mapbox.com/directions-matrix/v1/mapbox/${profile}/${path}?${params}`,
+        );
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          durations?: (number | null)[][];
+          distances?: (number | null)[][];
+        };
+        for (const item of items) {
+          const row = sources.indexOf(item.source);
+          const col = dests.indexOf(item.dest);
+          const seconds = data.durations?.[row]?.[col];
+          const meters = data.distances?.[row]?.[col];
+          if (seconds == null || meters == null) continue;
+          out[item.index] = { minutes: seconds / 60, meters };
+        }
+      } catch {
+        // These pairs show no times; the rest still do.
+      }
+    }),
+  );
+  return out;
+}
+
+export function directionsUrl(to: LatLng, mode: "walking" | "driving", from?: LatLng) {
+  const origin = from ? `&origin=${from.lat},${from.lng}` : "";
+  return `https://www.google.com/maps/dir/?api=1${origin}&destination=${to.lat},${to.lng}&travelmode=${mode}`;
 }
 
 export function formatMinutes(minutes: number) {

@@ -1,32 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { hasMapbox } from "@/lib/mapbox";
 import { supabase } from "@/lib/supabase";
 import { hotelName, isCheckOut, mapsSearch, parseFlight } from "@/lib/tickets";
-import type { Day, Leg, Stop, StopKind, Trip } from "@/lib/types";
-import {
-  ClosestList,
-  DistanceProvider,
-  NearMeBar,
-  NearMeButton,
-  TravelLine,
-  useDistances,
-  type DistanceApi,
-  type Place,
-} from "./Distance";
+import { fetchTrip, formatDate, isFlight, KIND_ICON, lodgingByDay, shortDate, todayIn } from "@/lib/trip";
+import type { Day, Leg, Stop, Trip } from "@/lib/types";
+import { Connector, RouteDayButton, useDayRoutes, type RouteApi } from "./Routes";
 import { CopyCode, FlightTicket, HotelTicket } from "./Tickets";
-
-const KIND_ICON: Record<StopKind, string> = {
-  travel: "✈️",
-  eat: "🍽️",
-  coffee: "☕",
-  work: "💻",
-  hike: "🥾",
-  see: "🏛️",
-  stay: "🛏️",
-  brewery: "🍺",
-};
 
 const HIGHLIGHT_MS = 4000;
 const REFETCH_DEBOUNCE_MS = 500;
@@ -55,34 +37,6 @@ function patchStopCoords(trip: Trip, id: string, lat: number | null, lng: number
   };
 }
 
-function todayIn(timezone: string) {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: timezone }).format(new Date());
-}
-
-function formatDate(date: string) {
-  return new Date(`${date}T12:00:00`).toLocaleDateString("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  });
-}
-
-function shortDate(date: string) {
-  return new Date(`${date}T12:00:00`).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-  });
-}
-
-async function fetchTrip(slug: string) {
-  const { data } = await supabase
-    .from("trips")
-    .select("*, legs(*), days(*, stops(*))")
-    .eq("slug", slug)
-    .maybeSingle();
-  return data as Trip | null;
-}
-
 export function TripView({ slug }: { slug: string }) {
   const [trip, setTrip] = useState<Trip | null>(null);
   const [missing, setMissing] = useState(false);
@@ -91,7 +45,7 @@ export function TripView({ slug }: { slug: string }) {
   const [changed, setChanged] = useState<Set<string>>(new Set());
   const todayRef = useRef<HTMLElement | null>(null);
   const scrolled = useRef(false);
-  const distance = useDistances();
+  const routes = useDayRoutes();
 
   useEffect(() => {
     let cancelled = false;
@@ -138,7 +92,7 @@ export function TripView({ slug }: { slug: string }) {
         { event: "*", schema: "public", table, filter: `trip_id=eq.${tripId}` },
         (payload) => {
           const row = payload.new as Record<string, unknown> & { id?: string };
-          // A coordinate backfill (from "How far?") is not news: patch the
+          // A coordinate backfill (from "Route this day" or Nearby) is not news: patch the
           // stop in place, no flash, no refetch.
           if (
             table === "stops" &&
@@ -196,7 +150,8 @@ export function TripView({ slug }: { slug: string }) {
       onTogglePast={() => setShowPast((value) => !value)}
       changed={changed}
       todayRef={todayRef}
-      distance={distance}
+      routes={routes}
+      nearbyHref={hasMapbox ? `/t/${slug}/nearby` : undefined}
     />
   );
 }
@@ -210,7 +165,8 @@ export function TripScreen({
   onTogglePast,
   changed,
   todayRef,
-  distance,
+  routes,
+  nearbyHref,
 }: {
   trip: Trip;
   today: string;
@@ -219,19 +175,18 @@ export function TripScreen({
   onTogglePast: () => void;
   changed: Set<string>;
   todayRef?: React.Ref<HTMLElement>;
-  /** Travel times; undefined hides "Near me" and "How far?". */
-  distance?: DistanceApi;
+  /** Stop-to-stop times; undefined hides "Route this day" and the connectors. */
+  routes?: RouteApi;
+  /** Where the "Nearby" pill goes; undefined hides it. */
+  nearbyHref?: string;
 }) {
-  const [closest, setClosest] = useState(false);
   const days = [...trip.days].sort((a, b) => a.date.localeCompare(b.date));
   const pastDays = days.filter((day) => day.date < today);
   const visibleDays = showPast ? days : days.filter((day) => day.date >= today);
   const lodgingDays = lodgingByDay(trip.legs ?? [], days);
   const shortSubtitle = trip.subtitle && trip.subtitle.length <= 32;
-  const places = placesFor(days.filter((day) => day.date >= today), lodgingDays);
-  const showClosest = Boolean(distance?.updatedAt) && closest;
 
-  const content = (
+  return (
     <main className="mx-auto w-full max-w-2xl px-4 pb-24 pt-5">
       <div className="flex items-center justify-between">
         <Link
@@ -244,8 +199,16 @@ export function TripScreen({
           </svg>
         </Link>
         <div className="flex items-center gap-2">
-          {distance && places.length > 0 && (
-            <NearMeButton api={distance} onTap={() => distance.nearMe(places)} />
+          {nearbyHref && (
+            <Link
+              href={nearbyHref}
+              className="flex items-center gap-1.5 rounded-full bg-accent px-3 py-2 font-mono text-[11px] font-semibold uppercase tracking-widest text-ink active:scale-[0.97] motion-reduce:active:scale-100"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden className="h-3.5 w-3.5" fill="currentColor">
+                <path d="M21.4 2.6a1 1 0 0 0-1.1-.2l-17 7.5a1 1 0 0 0 .1 1.9l7.1 2.1 2.1 7.1a1 1 0 0 0 1.9.1l7.5-17a1 1 0 0 0-.6-1.5Z" />
+              </svg>
+              Nearby
+            </Link>
           )}
           <div
             className={`flex items-center gap-2 rounded-full px-3 py-2 font-mono text-[11px] uppercase tracking-widest ${
@@ -277,115 +240,41 @@ export function TripScreen({
         </span>
       </div>
 
-      {distance && <NearMeBar api={distance} closest={closest} onClosest={setClosest} />}
-
-      {showClosest && distance ? (
-        <div className="mt-6">
-          <ClosestList api={distance} places={places} />
-        </div>
-      ) : (
-        <>
-          {pastDays.length > 0 && (
-            <button
-              type="button"
-              onClick={onTogglePast}
-              className="mt-8 w-full rounded-full bg-ink px-5 py-3.5 text-[13px] font-semibold uppercase tracking-wider text-white"
-            >
-              {showPast ? "Hide" : "Show"} past days · {pastDays.length}
-            </button>
-          )}
-
-          <div className="mt-6 space-y-4">
-            {visibleDays.map((day) => (
-              <DayCard
-                key={day.id}
-                day={day}
-                number={days.indexOf(day) + 1}
-                isToday={day.date === today}
-                isPast={day.date < today}
-                changed={changed}
-                lodging={lodgingDays.get(day.id)}
-                sectionRef={day.date === today ? todayRef : undefined}
-              />
-            ))}
-            {visibleDays.length === 0 && (
-              <p className="text-muted">This trip is over. Show past days to look back.</p>
-            )}
-          </div>
-        </>
+      {pastDays.length > 0 && (
+        <button
+          type="button"
+          onClick={onTogglePast}
+          className="mt-8 w-full rounded-full bg-ink px-5 py-3.5 text-[13px] font-semibold uppercase tracking-wider text-white"
+        >
+          {showPast ? "Hide" : "Show"} past days · {pastDays.length}
+        </button>
       )}
+
+      <div className="mt-6 space-y-4">
+        {visibleDays.map((day) => (
+          <DayCard
+            key={day.id}
+            trip={trip}
+            day={day}
+            number={days.indexOf(day) + 1}
+            isToday={day.date === today}
+            isPast={day.date < today}
+            changed={changed}
+            lodging={lodgingDays.get(day.id)}
+            sectionRef={day.date === today ? todayRef : undefined}
+            routes={routes}
+          />
+        ))}
+        {visibleDays.length === 0 && (
+          <p className="text-muted">This trip is over. Show past days to look back.</p>
+        )}
+      </div>
     </main>
   );
-
-  return distance ? (
-    <DistanceProvider value={{ api: distance, places }}>{content}</DistanceProvider>
-  ) : (
-    content
-  );
-}
-
-/**
- * What "Near me" times: every stop on the upcoming days except flights and
- * stops already done, plus the leg hotel cards ("Your base").
- */
-function placesFor(days: Day[], lodgingDays: Map<string, Leg>): Place[] {
-  const places: Place[] = [];
-  for (const day of days) {
-    const dayLabel = formatDate(day.date);
-    const stops = [...day.stops].sort((a, b) => a.position - b.position);
-    for (const stop of stops) {
-      if (stop.kind === "travel" || stop.done) continue;
-      places.push({
-        id: stop.id,
-        dayId: day.id,
-        dayLabel,
-        icon: KIND_ICON[stop.kind],
-        title: stop.kind === "stay" ? hotelName(stop.title) : stop.title,
-        address: stop.address,
-        mapUrl: stop.map_url,
-        coords: stop.lat != null && stop.lng != null ? { lat: stop.lat, lng: stop.lng } : null,
-        persist: true,
-      });
-    }
-    const leg = lodgingDays.get(day.id);
-    if (leg?.lodging_name) {
-      places.push({
-        id: leg.id,
-        dayId: day.id,
-        dayLabel,
-        icon: KIND_ICON.stay,
-        title: leg.lodging_name,
-        address: leg.lodging_address,
-        mapUrl: leg.lodging_map_url,
-        coords: null,
-        // Legs have no coordinate columns: looked up once per session.
-        persist: false,
-      });
-    }
-  }
-  return places;
-}
-
-/**
- * A leg's hotel shows as a card on the first day of that leg, unless the leg
- * already has a `stay` stop, which renders its own card.
- */
-function lodgingByDay(legs: Leg[], days: Day[]) {
-  const map = new Map<string, Leg>();
-  for (const leg of legs) {
-    if (!leg.lodging_name) continue;
-    const legDays = days.filter((day) => day.leg_id === leg.id);
-    if (legDays.some((day) => day.stops.some((stop) => stop.kind === "stay"))) continue;
-    const first =
-      legDays.find((day) => day.date === leg.start_date) ??
-      legDays[0] ??
-      days.find((day) => day.date === leg.start_date);
-    if (first && !map.has(first.id)) map.set(first.id, leg);
-  }
-  return map;
 }
 
 function DayCard({
+  trip,
   day,
   number,
   isToday,
@@ -393,7 +282,9 @@ function DayCard({
   changed,
   lodging,
   sectionRef,
+  routes,
 }: {
+  trip: Trip;
   day: Day;
   number: number;
   isToday: boolean;
@@ -401,6 +292,7 @@ function DayCard({
   changed: Set<string>;
   lodging?: Leg;
   sectionRef?: React.Ref<HTMLElement>;
+  routes?: RouteApi;
 }) {
   const stops = [...day.stops].sort((a, b) => a.position - b.position);
   const topLevel = stops.filter((stop) => !stop.parent_stop_id);
@@ -429,6 +321,9 @@ function DayCard({
           {day.title && (
             <p className="mt-1 text-[14px] font-light leading-snug text-muted">{day.title}</p>
           )}
+          {routes && (
+            <RouteDayButton state={routes.dayState(day)} onTap={() => routes.routeDay(day, trip)} />
+          )}
         </div>
         {isToday ? (
           <span className="shrink-0 self-start rounded-full bg-accent px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-wider text-ink">
@@ -443,14 +338,20 @@ function DayCard({
         )}
       </header>
       <ul className="divide-y divide-line pb-1">
-        {topLevel.map((stop) => (
-          <StopItem
-            key={stop.id}
-            stop={stop}
-            nested={stops.filter((child) => child.parent_stop_id === stop.id)}
-            changed={changed}
-          />
-        ))}
+        {topLevel.map((stop, i) => {
+          const prev = topLevel[i - 1];
+          const link = prev && routes && !isFlight(prev) && !isFlight(stop) ? routes.connector(prev, stop) : null;
+          return (
+            <Fragment key={stop.id}>
+              {link && <Connector state={link} />}
+              <StopItem
+                stop={stop}
+                nested={stops.filter((child) => child.parent_stop_id === stop.id)}
+                changed={changed}
+              />
+            </Fragment>
+          );
+        })}
         {lodging && (
           <li className={`px-3 py-3 ${changed.has(lodging.id) ? "just-changed" : ""}`}>
             <HotelTicket
@@ -467,9 +368,7 @@ function DayCard({
                 lodging.lodging_map_url ||
                 mapsSearch(lodging.lodging_address || lodging.lodging_name || "")
               }
-            >
-              <TravelLine id={lodging.id} className="mt-3" raised />
-            </HotelTicket>
+            />
           </li>
         )}
         {topLevel.length === 0 && !lodging && (
@@ -517,9 +416,7 @@ function StopItem({
           mapUrl={stop.map_url || mapsSearch(stop.address || name)}
           booked={stop.booked}
           done={stop.done}
-        >
-          <TravelLine id={stop.id} className="mt-3" raised />
-        </HotelTicket>
+        />
       )}
       {nested.length > 0 && (
         <div className="px-2 pt-3">
@@ -590,7 +487,6 @@ function StopRow({
           {stop.address && (
             <p className="mt-1 font-mono text-[11px] leading-snug text-faint">{stop.address}</p>
           )}
-          <TravelLine id={stop.id} className="mt-2" />
           {stop.booking_code && (
             <div className="mt-2 inline-block max-w-full rounded-2xl bg-background px-3 py-2">
               <CopyCode code={stop.booking_code} tone="light" />
@@ -621,7 +517,6 @@ function NestedStops({ nested, changed }: { nested: Stop[]; changed: Set<string>
           <div className="min-w-0 flex-1">
             <span className="font-semibold">{child.title}</span>
             {child.note && <span className="font-light text-muted"> · {child.note}</span>}
-            <TravelLine id={child.id} className="mt-1.5" raised />
           </div>
         </li>
       ))}
