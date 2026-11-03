@@ -3,6 +3,7 @@
 import type { Session } from "@supabase/supabase-js";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { supabase } from "@/lib/supabase";
+import { clearSavedTrips } from "@/lib/tripCache";
 import { AppMark } from "./icons";
 
 const noop = () => () => {};
@@ -12,7 +13,11 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
 
   useEffect(() => {
-    const { data } = supabase.auth.onAuthStateChange((_event, next) => setSession(next));
+    const { data } = supabase.auth.onAuthStateChange((event, next) => {
+      // Saved trips and photos belong to the account that synced them.
+      if (event === "SIGNED_OUT") clearSavedTrips();
+      setSession(next);
+    });
     return () => data.subscription.unsubscribe();
   }, []);
 

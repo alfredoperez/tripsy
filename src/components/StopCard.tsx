@@ -5,6 +5,7 @@
 
 import { useRef, useState } from "react";
 import { CLAUDE_PROJECT_URL, stopMapUrl } from "@/lib/links";
+import { photoUrl } from "@/lib/photos";
 import type { Stop } from "@/lib/types";
 import {
   CheckIcon,
@@ -161,7 +162,7 @@ export function StopRowButton({
         flash ? "just-changed-solid" : ""
       }`}
     >
-      <Photo url={stop.image_url} kind={stop.kind} className="h-16 w-16 rounded-[18px]">
+      <Photo url={photoUrl(stop)} kind={stop.kind} className="h-16 w-16 rounded-[18px]">
         <span className="absolute bottom-1 left-1 flex h-6 w-6 items-center justify-center rounded-full bg-panel text-ink">
           <KindIcon kind={stop.kind} className="h-3.5 w-3.5" />
         </span>
@@ -227,7 +228,7 @@ export function StopDetails({
 
   return (
     <div id={id} className={`${ticket ? "mt-2" : "mx-3 mb-2.5"} overflow-hidden rounded-[22px] bg-paper`}>
-      {!ticket && <Photo url={stop.image_url} kind={stop.kind} className="h-[190px] w-full" />}
+      {!ticket && <Photo url={photoUrl(stop)} kind={stop.kind} className="h-[190px] w-full" />}
       <div className="px-4 pb-4 pt-3">
         {!ticket && stop.note && <p className="text-[14px] leading-normal text-muted">{stop.note}</p>}
         {!ticket && stop.address && (

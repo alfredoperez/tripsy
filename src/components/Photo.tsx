@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { isStoredPhoto } from "@/lib/photos";
 import type { StopKind } from "@/lib/types";
 
 /** A warm wash per kind, shown when a stop has no photo or it fails to load. */
@@ -40,6 +41,8 @@ export function Photo({
           loading="lazy"
           decoding="async"
           referrerPolicy="no-referrer"
+          // Our Storage copies allow CORS, so they cache as real responses, not opaque ones.
+          crossOrigin={isStoredPhoto(url) ? "anonymous" : undefined}
           onError={() => setFailed(url)}
           className="absolute inset-0 h-full w-full object-cover"
         />

@@ -1,16 +1,30 @@
 // Trip helpers shared by the trip page, the Nearby page and the preview.
 
+import { photoUrl } from "@/lib/photos";
 import { supabase } from "@/lib/supabase";
 import { hotelName, parseFlight } from "@/lib/tickets";
 import type { Day, Leg, Stop, Trip } from "@/lib/types";
 
 export async function fetchTrip(slug: string) {
-  const { data } = await supabase
-    .from("trips")
-    .select("*, legs(*), days(*, stops(*))")
-    .eq("slug", slug)
-    .maybeSingle();
-  return data as Trip | null;
+  return (await fetchTripResult(slug)).trip;
+}
+
+/**
+ * The trip, or why there isn't one: `error` is a failed request (offline, server
+ * down), while no trip and no error means it doesn't exist or isn't shared with
+ * this account.
+ */
+export async function fetchTripResult(slug: string): Promise<{ trip: Trip | null; error: boolean }> {
+  try {
+    const { data, error } = await supabase
+      .from("trips")
+      .select("*, legs(*), days(*, stops(*))")
+      .eq("slug", slug)
+      .maybeSingle();
+    return { trip: (data as Trip | null) ?? null, error: Boolean(error) };
+  } catch {
+    return { trip: null, error: true };
+  }
 }
 
 export function todayIn(timezone: string) {
@@ -54,7 +68,7 @@ export function stopPlace(stop: Stop, day: Day, dayLabel = formatDate(day.date).
     dayId: day.id,
     dayLabel,
     kind: stop.kind,
-    imageUrl: stop.image_url,
+    imageUrl: photoUrl(stop),
     title: stop.kind === "stay" ? hotelName(stop.title) : stop.title,
     address: stop.address,
     mapUrl: stop.map_url,
