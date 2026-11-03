@@ -1,13 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useOffline } from "next/offline";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { CLAUDE_PROJECT_URL } from "@/lib/links";
 import { supabase } from "@/lib/supabase";
 import { hotelName, isCheckOut, mapsSearch, parseFlight } from "@/lib/tickets";
-import { fetchTrip, formatDate, isFlight, lodgingByDay, shortDate, todayIn } from "@/lib/trip";
+import { fetchTripResult, formatDate, isFlight, lodgingByDay, shortDate, todayIn } from "@/lib/trip";
+import { forgetTrip, readTrip, syncedLabel, writeTrip } from "@/lib/tripCache";
 import type { Day, Leg, Stop, Trip } from "@/lib/types";
 import { useNearby, type NearbyApi } from "./Distance";
+import { rememberPage } from "./ServiceWorker";
 import { BackIcon, ClaudeIcon, KindIcon, ListIcon, NearIcon } from "./icons";
 import { nearbyPlaces, NearbyPanel } from "./Nearby";
 import { Connector, RouteDayButton, useDayRoutes, type RouteApi } from "./Routes";
@@ -18,34 +21,55 @@ import { FlightTicket, HotelTicket } from "./Tickets";
 export type Tab = "itinerary" | "nearby";
 
 const HIGHLIGHT_MS = 4000;
+
+function subscribeOnline(onChange: () => void) {
+  window.addEventListener("online", onChange);
+  window.addEventListener("offline", onChange);
+  return () => {
+    window.removeEventListener("online", onChange);
+    window.removeEventListener("offline", onChange);
+  };
+}
 const REFETCH_DEBOUNCE_MS = 500;
-const COORD_COLUMNS = new Set(["lat", "lng", "updated_at"]);
+/** Background fills: coordinates from routing, image_path from the photo mirror. */
+const QUIET_COLUMNS = new Set(["lat", "lng", "image_path", "updated_at"]);
 
 /**
- * True when an update touched only lat/lng/updated_at. Needs the old row,
- * which stops sends in full (replica identity full); without it, assume a
+ * True when an update touched only background-filled columns. Needs the old
+ * row, which stops sends in full (replica identity full); without it, assume a
  * real change.
  */
-function onlyCoordsChanged(old: Record<string, unknown> | undefined, next: Record<string, unknown>) {
+function onlyQuietChanged(old: Record<string, unknown> | undefined, next: Record<string, unknown>) {
   if (!old || Object.keys(old).length <= 1) return false;
   return Object.keys(next).every(
-    (key) => COORD_COLUMNS.has(key) || JSON.stringify(old[key]) === JSON.stringify(next[key]),
+    (key) => QUIET_COLUMNS.has(key) || JSON.stringify(old[key]) === JSON.stringify(next[key]),
   );
 }
 
-function patchStopCoords(trip: Trip, id: string, lat: number | null, lng: number | null): Trip {
+type QuietFields = Pick<Stop, "lat" | "lng" | "image_path">;
+
+function patchStopQuiet(trip: Trip, id: string, fields: QuietFields): Trip {
   return {
     ...trip,
     days: trip.days.map((day) =>
       day.stops.some((stop) => stop.id === id)
-        ? { ...day, stops: day.stops.map((stop) => (stop.id === id ? { ...stop, lat, lng } : stop)) }
+        ? { ...day, stops: day.stops.map((stop) => (stop.id === id ? { ...stop, ...fields } : stop)) }
         : day,
     ),
   };
 }
 
 export function TripView({ slug, initialTab = "itinerary" }: { slug: string; initialTab?: Tab }) {
-  const [trip, setTrip] = useState<Trip | null>(null);
+  // The copy saved on this phone shows at once; the network copy replaces it.
+  // Safe to read during render: AuthGate renders nothing on the server.
+  const [saved] = useState(() => readTrip(slug));
+  const [trip, setTrip] = useState<Trip | null>(saved?.data ?? null);
+  const [syncedAt, setSyncedAt] = useState<number | null>(saved?.syncedAt ?? null);
+  const [unreachable, setUnreachable] = useState(false);
+  const offline = useOffline();
+  // The phone's own signal, so the pill says Offline at once instead of after
+  // the Supabase client gives up retrying.
+  const deviceOffline = useSyncExternalStore(subscribeOnline, () => !navigator.onLine, () => false);
   const [missing, setMissing] = useState(false);
   const [live, setLive] = useState(false);
   const [showPast, setShowPast] = useState(false);
@@ -56,22 +80,56 @@ export function TripView({ slug, initialTab = "itinerary" }: { slug: string; ini
   const routes = useDayRoutes();
   const nearby = useNearby();
 
+  const applyResult = useCallback(
+    ({ trip: data, error }: Awaited<ReturnType<typeof fetchTripResult>>) => {
+      if (data) {
+        setTrip(data);
+        setSyncedAt(Date.now());
+        setUnreachable(false);
+      } else if (error) {
+        // Offline or the server is down: keep showing the saved copy.
+        setUnreachable(true);
+      } else {
+        // Gone, or no longer shared with this account: drop the saved copy too.
+        forgetTrip(slug);
+        setTrip(null);
+        setMissing(true);
+      }
+    },
+    [slug],
+  );
+
   const reload = useCallback(() => {
-    fetchTrip(slug).then((data) => data && setTrip(data));
-  }, [slug]);
+    fetchTripResult(slug).then(applyResult);
+  }, [slug, applyResult]);
   const { api: edits, toast } = useStopEdits({ trip, setTrip, persist: true, reload });
 
   useEffect(() => {
     let cancelled = false;
-    fetchTrip(slug).then((data) => {
-      if (cancelled) return;
-      if (data) setTrip(data);
-      else setMissing(true);
+    fetchTripResult(slug).then((result) => {
+      if (!cancelled) applyResult(result);
     });
     return () => {
       cancelled = true;
     };
+  }, [slug, applyResult]);
+
+  // Keep the saved copy current, including edits made on this phone.
+  useEffect(() => {
+    if (trip && syncedAt) writeTrip(slug, trip, syncedAt);
+  }, [slug, trip, syncedAt]);
+
+  // Keep this page's shell for offline use, whichever tab it opened on.
+  useEffect(() => {
+    rememberPage(`/t/${slug}`);
+    rememberPage(`/t/${slug}/nearby`);
   }, [slug]);
+
+  // Back online: catch up on anything missed while away.
+  useEffect(() => {
+    window.addEventListener("online", reload);
+    return () => window.removeEventListener("online", reload);
+  }, [reload]);
 
   const tripId = trip?.id;
 
@@ -95,7 +153,7 @@ export function TripView({ slug, initialTab = "itinerary" }: { slug: string; ini
       if (refetchTimer) clearTimeout(refetchTimer);
       refetchTimer = setTimeout(() => {
         refetchTimer = null;
-        fetchTrip(slug).then((data) => data && setTrip(data));
+        fetchTripResult(slug).then(applyResult);
       }, REFETCH_DEBOUNCE_MS);
     };
 
@@ -112,12 +170,15 @@ export function TripView({ slug, initialTab = "itinerary" }: { slug: string; ini
             table === "stops" &&
             payload.eventType === "UPDATE" &&
             row.id &&
-            onlyCoordsChanged(payload.old as Record<string, unknown>, row)
+            onlyQuietChanged(payload.old as Record<string, unknown>, row)
           ) {
             const { id } = row;
-            const lat = row.lat as number | null;
-            const lng = row.lng as number | null;
-            setTrip((prev) => prev && patchStopCoords(prev, id, lat, lng));
+            const fields: QuietFields = {
+              lat: row.lat as number | null,
+              lng: row.lng as number | null,
+              image_path: row.image_path as string | null,
+            };
+            setTrip((prev) => prev && patchStopQuiet(prev, id, fields));
             return;
           }
           if (row.id) flag(row.id);
@@ -125,13 +186,21 @@ export function TripView({ slug, initialTab = "itinerary" }: { slug: string; ini
         },
       );
     }
-    channel.subscribe((status) => setLive(status === "SUBSCRIBED"));
+    // A reconnect may have missed changes, so every subscribe after the first refetches.
+    let subscribedOnce = false;
+    channel.subscribe((status) => {
+      const subscribed = status === "SUBSCRIBED";
+      setLive(subscribed);
+      if (!subscribed) return;
+      if (subscribedOnce) refetch();
+      subscribedOnce = true;
+    });
 
     return () => {
       if (refetchTimer) clearTimeout(refetchTimer);
       supabase.removeChannel(channel);
     };
-  }, [tripId, slug]);
+  }, [tripId, slug, applyResult]);
 
   const today = trip ? todayIn(trip.timezone) : "";
 
@@ -162,7 +231,9 @@ export function TripView({ slug, initialTab = "itinerary" }: { slug: string; ini
   }
   if (!trip) {
     return (
-      <p className="p-8 font-mono text-xs uppercase tracking-widest text-muted">Loading…</p>
+      <p className="p-8 font-mono text-xs uppercase tracking-widest text-muted">
+        {unreachable ? "Offline. This trip isn’t saved on this phone yet." : "Loading…"}
+      </p>
     );
   }
 
@@ -171,6 +242,8 @@ export function TripView({ slug, initialTab = "itinerary" }: { slug: string; ini
       trip={trip}
       today={today}
       live={live}
+      offline={!live && (offline || deviceOffline || unreachable)}
+      syncedAt={syncedAt}
       showPast={showPast}
       onTogglePast={() => setShowPast((value) => !value)}
       changed={changed}
@@ -202,6 +275,8 @@ export function TripScreen({
   trip: fullTrip,
   today,
   live,
+  offline = false,
+  syncedAt = null,
   showPast,
   onTogglePast,
   changed,
@@ -217,6 +292,9 @@ export function TripScreen({
   trip: Trip;
   today: string;
   live: boolean;
+  /** No connection: the pill says when this copy was last synced. */
+  offline?: boolean;
+  syncedAt?: number | null;
   showPast: boolean;
   onTogglePast: () => void;
   changed: Set<string>;
@@ -269,7 +347,13 @@ export function TripScreen({
             }`}
           >
             <span className={`h-[7px] w-[7px] rounded-full ${live ? "bg-live" : "bg-faint"}`} aria-hidden />
-            {live ? "Live" : "Connecting"}
+            {live
+              ? "Live"
+              : offline
+                ? syncedAt
+                  ? `Offline · ${syncedLabel(syncedAt)}`
+                  : "Offline"
+                : "Connecting"}
           </div>
         </div>
 

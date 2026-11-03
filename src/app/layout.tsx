@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist_Mono, Inter_Tight } from "next/font/google";
 import { AuthGate } from "@/components/AuthGate";
+import { ServiceWorker } from "@/components/ServiceWorker";
 import "./globals.css";
 
 // Inter Tight: a tight grotesk that holds up at 800 for uppercase headlines
@@ -34,6 +35,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${interTight.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
+        <ServiceWorker />
         <AuthGate>{children}</AuthGate>
       </body>
     </html>
