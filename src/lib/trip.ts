@@ -54,10 +54,13 @@ export function isFlight(stop: Stop) {
 /**
  * Whether a stop names a place we can look up. A travel stop without an
  * address or map link ("Uber to the airport", "Bus to Tequila") is a
- * journey, not a place, so its title is never geocoded.
+ * journey, not a place, so its title is never geocoded. Neither is a
+ * pick-one slot.
  */
 export function isPlaceable(stop: Stop) {
   if (isFlight(stop)) return false;
+  // A pick-one slot ("Asado lunch") is not a place; its options are.
+  if (stop.is_choice) return false;
   if (stop.kind !== "travel") return true;
   return Boolean(stop.address || stop.map_url || (stop.lat != null && stop.lng != null));
 }

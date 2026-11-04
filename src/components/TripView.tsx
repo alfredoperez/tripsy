@@ -9,6 +9,7 @@ import { hotelName, isCheckOut, mapsSearch, parseFlight } from "@/lib/tickets";
 import { fetchTripResult, formatDate, isFlight, lodgingByDay, shortDate, todayIn } from "@/lib/trip";
 import { forgetTrip, readTrip, syncedLabel, writeTrip } from "@/lib/tripCache";
 import type { Day, Leg, Stop, Trip } from "@/lib/types";
+import { ChoiceSlot } from "./Choice";
 import { useNearby, type NearbyApi } from "./Distance";
 import { rememberPage } from "./ServiceWorker";
 import { BackIcon, ClaudeIcon, KindIcon, ListIcon, NearIcon } from "./icons";
@@ -597,6 +598,9 @@ function DayCard({
 /** Picks the boarding pass, the hotel card, or a plain row for a stop. */
 function StopItem({ stop, day, nested, ui }: { stop: Stop; day: Day; nested: Stop[]; ui: StopUi }) {
   const { open, toggle, edits, onMove, changed } = ui;
+  if (stop.is_choice) {
+    return <ChoiceSlot slot={stop} options={nested} api={edits} changed={changed} />;
+  }
   const flight = parseFlight(stop);
   const isStay = stop.kind === "stay";
   const isOpen = open.has(stop.id);

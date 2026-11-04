@@ -32,6 +32,8 @@ function stop(day_id: string, fields: Partial<Stop> & Pick<Stop, "kind" | "title
     id: `s${n}`,
     day_id,
     parent_stop_id: null,
+    is_choice: false,
+    chosen_option_id: null,
     position: n,
     time_label: null,
     note: null,
