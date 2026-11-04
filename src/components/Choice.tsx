@@ -9,6 +9,7 @@ import { stopMapUrl } from "@/lib/links";
 import { photoUrl } from "@/lib/photos";
 import type { Stop } from "@/lib/types";
 import { GoogleMapsIcon, KindIcon } from "./icons";
+import { LinkedText } from "./LinkedText";
 import { Photo } from "./Photo";
 import type { StopEditApi } from "./StopEdits";
 
@@ -45,7 +46,11 @@ export function ChoiceSlot({
           </span>
         </div>
         <h3 className="mt-1 px-1 text-[16px] font-semibold leading-snug [overflow-wrap:anywhere]">{slot.title}</h3>
-        {slot.note && <p className="mt-0.5 px-1 text-[13px] leading-snug text-muted">{slot.note}</p>}
+        {slot.note && (
+          <p className="mt-0.5 px-1 text-[13px] leading-snug text-muted">
+            <LinkedText text={slot.note} linkClassName="text-ink" />
+          </p>
+        )}
 
         <ul id={listId} className="mt-2.5 space-y-2">
           {chosen && (
@@ -115,7 +120,11 @@ function OptionRow({
           <span className="font-mono text-[11px] uppercase text-muted">{option.time_label}</span>
         )}
         <p className="text-[15px] font-semibold leading-snug [overflow-wrap:anywhere]">{option.title}</p>
-        {option.note && <p className="mt-0.5 text-[13px] leading-snug text-muted">{option.note}</p>}
+        {option.note && (
+          <p className="mt-0.5 text-[13px] leading-snug text-muted">
+            <LinkedText text={option.note} linkClassName="text-ink" />
+          </p>
+        )}
         <div className="mt-2 flex flex-wrap gap-1.5">
           <button
             type="button"

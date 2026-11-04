@@ -8,5 +8,10 @@ export const CLAUDE_PROJECT_URL = "https://claude.ai/project/01a136a8-7a5e-75f6-
 
 /** The stop's own map link, else a Google Maps search for its name and address. */
 export function stopMapUrl(stop: Pick<Stop, "map_url" | "title" | "address">) {
-  return stop.map_url || mapsSearch([stop.title, stop.address].filter(Boolean).join(" "));
+  return stop.map_url || mapsSearch([placeName(stop.title), stop.address].filter(Boolean).join(" "));
+}
+
+/** The title without plan markers ("🎟 ", "Maybe: ") that would confuse a map search. */
+export function placeName(title: string) {
+  return title.replace(/^(?:🎟\uFE0F?\s*)?(?:Maybe:\s*)?/u, "").trim();
 }

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { Flight } from "@/lib/tickets";
+import { LinkedText } from "./LinkedText";
 
 /** A booking code, big, that copies itself when tapped. */
 export function CopyCode({
@@ -172,7 +173,11 @@ export function FlightTicket({
           )}
         </div>
 
-        {note && <p className="mt-4 line-clamp-3 text-[13px] leading-snug text-white/50">{note}</p>}
+        {note && (
+          <p className="mt-4 line-clamp-3 text-[13px] leading-snug text-white/50">
+            <LinkedText text={note} linkClassName="text-white" />
+          </p>
+        )}
       </div>
 
       <div className="mx-5 border-t border-dashed border-white/15" />
@@ -236,7 +241,11 @@ export function HotelTicket({
         </div>
         <h3 className="headline mt-4 text-[26px] [overflow-wrap:anywhere]">{name}</h3>
         {address && <p className="mt-2 text-[14px] font-light leading-snug text-muted">{address}</p>}
-        {note && <p className="mt-2 text-[13px] leading-snug text-muted">{note}</p>}
+        {note && (
+          <p className="mt-2 text-[13px] leading-snug text-muted">
+            <LinkedText text={note} linkClassName="text-ink" />
+          </p>
+        )}
         {children}
       </div>
 
