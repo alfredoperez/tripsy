@@ -28,6 +28,10 @@ export type Stop = {
   /** Filled on demand the first time someone asks how far the stop is. */
   lat: number | null;
   lng: number | null;
+  /** A pick-one slot: its child stops are the options. */
+  is_choice: boolean;
+  /** The option picked for a pick-one slot; null while still deciding. */
+  chosen_option_id: string | null;
 };
 
 export type Day = {

@@ -30,6 +30,8 @@ export type StopEditApi = {
   remove: (stop: Stop) => void;
   /** After a swipe: deleted when the Undo toast runs out. */
   swipeRemove: (stop: Stop) => void;
+  /** Pick an option in a pick-one slot; null goes back to choosing. */
+  choose: (slot: Stop, optionId: string | null) => void;
   /** Stops removed here, kept off screen even if a refetch still has them. */
   hidden: ReadonlySet<string>;
 };
@@ -207,7 +209,19 @@ export function useStopEdits({
     [hide, show, dismiss, deleteNow],
   );
 
-  const api: StopEditApi = { toggleDone, doNext, moveTo, remove, swipeRemove, hidden };
+  const choose = useCallback(
+    (slot: Stop, optionId: string | null) => {
+      const option = optionId
+        ? tripRef.current?.days.flatMap((day) => day.stops).find((s) => s.id === optionId)
+        : null;
+      setTrip((prev) => prev && patchStop(prev, slot.id, { chosen_option_id: optionId }));
+      show(option ? `Picked ${shortTitle(option)}` : `${shortTitle(slot)}: choosing again`);
+      write(() => check(supabase.from("stops").update({ chosen_option_id: optionId }).eq("id", slot.id)));
+    },
+    [setTrip, show, write],
+  );
+
+  const api: StopEditApi = { toggleDone, doNext, moveTo, remove, swipeRemove, choose, hidden };
   return { api, toast, dismiss, show };
 }
 

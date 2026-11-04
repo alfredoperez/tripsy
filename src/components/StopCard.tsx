@@ -125,7 +125,7 @@ export function SwipeRow({ onRemove, children }: { onRemove: () => void; childre
   );
 }
 
-function Tag({ children, tone }: { children: React.ReactNode; tone: "lime" | "ink" }) {
+export function Tag({ children, tone }: { children: React.ReactNode; tone: "lime" | "ink" }) {
   return (
     <span
       className={`rounded-full px-2 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-wider ${
