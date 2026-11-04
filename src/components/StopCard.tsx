@@ -6,6 +6,7 @@
 import { useRef, useState } from "react";
 import { CLAUDE_PROJECT_URL, stopMapUrl } from "@/lib/links";
 import { photoUrl } from "@/lib/photos";
+import { LinkedText, withoutLinks } from "./LinkedText";
 import type { Stop } from "@/lib/types";
 import {
   CheckIcon,
@@ -185,7 +186,9 @@ export function StopRowButton({
           {stop.title}
         </span>
         {(stop.note || stop.address) && (
-          <span className="mt-0.5 block truncate text-[13px] text-muted">{stop.note || stop.address}</span>
+          <span className="mt-0.5 block truncate text-[13px] text-muted">
+            {stop.note ? withoutLinks(stop.note) : stop.address}
+          </span>
         )}
       </span>
       <span
@@ -230,7 +233,11 @@ export function StopDetails({
     <div id={id} className={`${ticket ? "mt-2" : "mx-3 mb-2.5"} overflow-hidden rounded-[22px] bg-paper`}>
       {!ticket && <Photo url={photoUrl(stop)} kind={stop.kind} className="h-[190px] w-full" />}
       <div className="px-4 pb-4 pt-3">
-        {!ticket && stop.note && <p className="text-[14px] leading-normal text-muted">{stop.note}</p>}
+        {!ticket && stop.note && (
+          <p className="text-[14px] leading-normal text-muted">
+            <LinkedText text={stop.note} linkClassName="text-ink" />
+          </p>
+        )}
         {!ticket && stop.address && (
           <p className="mt-1.5 font-mono text-[11px] leading-snug text-faint">{stop.address}</p>
         )}
