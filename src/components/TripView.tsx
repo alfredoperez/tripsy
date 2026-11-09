@@ -10,6 +10,7 @@ import { fetchTripResult, formatDate, isFlight, lodgingByDay, shortDate, todayIn
 import { forgetTrip, readTrip, syncedLabel, writeTrip } from "@/lib/tripCache";
 import type { Day, Leg, Stop, Trip } from "@/lib/types";
 import { ChoiceSlot } from "./Choice";
+import { LinkedText } from "./LinkedText";
 import { useNearby, type NearbyApi } from "./Distance";
 import { rememberPage } from "./ServiceWorker";
 import { BackIcon, ClaudeIcon, KindIcon, ListIcon, NearIcon } from "./icons";
@@ -688,7 +689,12 @@ function NestedStops({ nested, changed }: { nested: Stop[]; changed: Set<string>
           <KindIcon kind={child.kind} className="mt-0.5 h-4 w-4 shrink-0" />
           <div className="min-w-0 flex-1">
             <span className={`font-semibold ${child.done ? "text-faint line-through" : ""}`}>{child.title}</span>
-            {child.note && <span className="font-light text-muted"> · {child.note}</span>}
+            {child.note && (
+              <span className="font-light text-muted">
+                {" · "}
+                <LinkedText text={child.note} linkClassName="text-ink" />
+              </span>
+            )}
           </div>
         </li>
       ))}
